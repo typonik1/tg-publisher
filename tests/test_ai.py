@@ -89,6 +89,35 @@ class AITests(unittest.IsolatedAsyncioTestCase):
                 await ai.generate_caption(make_cfg(), "original")
         self.assertNotIsInstance(caught.exception, ai.AIRateLimitError)
 
+    async def test_refusal_never_returns_as_caption(self):
+        for text in (
+            'Я не могу генерировать контент сексуального или откровенного характера (18+), так как это противоречит правилам.',
+            'Извините, но я не могу комментировать это изображение.',
+            "I'm sorry, but I can't help with this request.",
+            'I cannot generate a caption for this image.',
+        ):
+            with self.subTest(text=text):
+                FakeAsyncClient.responses = [FakeResponse(200, payload={'choices': [{'message': {'content': text}}]})]
+                with patch.object(ai.httpx, 'AsyncClient', FakeAsyncClient):
+                    with self.assertRaises(ai.AIError):
+                        await ai.generate_caption(make_cfg(), 'original')
+
+    async def test_provider_structured_refusal_and_content_filter(self):
+        for choice in (
+            {'message': {'content': 'placeholder', 'refusal': 'declined'}},
+            {'message': {'content': 'placeholder'}, 'finish_reason': 'content_filter'},
+        ):
+            FakeAsyncClient.responses = [FakeResponse(200, payload={'choices': [choice]})]
+            with patch.object(ai.httpx, 'AsyncClient', FakeAsyncClient):
+                with self.assertRaises(ai.AIError):
+                    await ai.generate_caption(make_cfg(), 'original')
+
+    async def test_normal_caption_with_first_person_is_preserved(self):
+        text = 'Когда я не могу перестать смеяться над этим мемом 😂'
+        FakeAsyncClient.responses = [FakeResponse(200, payload={'choices': [{'message': {'content': text}}]})]
+        with patch.object(ai.httpx, 'AsyncClient', FakeAsyncClient):
+            self.assertEqual(await ai.generate_caption(make_cfg(), 'original'), text)
+
     async def test_429_without_retry_after_uses_bounded_defaults(self):
         cases = [
             ("temporary rate limit", 60),

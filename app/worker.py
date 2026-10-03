@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from zoneinfo import ZoneInfo
 
 from telethon import errors, functions
@@ -17,11 +18,13 @@ from telethon.tl.types import (Document, MessageEntityCustomEmoji, MessageEntity
 
 from . import __version__, events
 from .actions import STALE_ACTION_SEC, dispatch
-from .ai import AIError, generate_caption
+from .ai import AIError, generate_caption, validate_caption
 from .config import Config
+from .content import filter_source_content, is_advertisement
 from .db import DB
 from .logic import (AI_FAILED, AI_GENERATED, AI_NO_PREVIEW, AI_PROCESSING, AI_UNCHECKED, AMBIGUOUS, FAILED,
                     OLD, PARSED, SKIPPED, backoff_seconds, build_caption, due_slot, group_messages, in_window)
+from .logic import parse_ref
 from .settings import RuntimeSettings
 from .media import album_kind, media_batches, prepare_media
 from .tg import ensure_connected, resolve
@@ -29,6 +32,8 @@ from .tg import ensure_connected, resolve
 log = logging.getLogger("worker")
 
 UNCERTAIN = (ConnectionError, asyncio.TimeoutError, TimeoutError, OSError)
+# Verified Telegram peer of «2D WEBM | аниме мемы». Titles are not proof of identity.
+LINK_ALLOWED_CHANNEL_ID = 1140244688
 
 
 def msg_stats(msgs) -> dict:
@@ -230,15 +235,38 @@ class Worker:
             shutil.rmtree(tmp, ignore_errors=True)
 
     # ================= AI (только для спаршенных) =================
-    async def _ai(self, post, image: str | None, rt):
+    @staticmethod
+    def _source_links_allowed(post, source_entity=None):
+        if source_entity is not None:
+            return getattr(source_entity, 'id', None) == LINK_ALLOWED_CHANNEL_ID
+        kind, value = parse_ref(post.source_ref)
+        return kind == 'id' and value in (LINK_ALLOWED_CHANNEL_ID, -1000000000000 - LINK_ALLOWED_CHANNEL_ID)
+
+    async def _ai(self, post, image: str | None, rt, source_entity=None, source_entities=None):
         if post.kind != PARSED or not rt.ai_enabled:
             return None
+        allow_links = self._source_links_allowed(post, source_entity)
+
+        def caption_text(text):
+            text = validate_caption(text)
+            if not allow_links:
+                text = filter_source_content(text)[0]
+            return validate_caption(text)
+
         if post.ai_status == AI_GENERATED:
-            return post.ai_caption
+            try:
+                return caption_text(post.ai_caption)
+            except AIError as e:
+                await self.db.set_ai(post.id, AI_FAILED, None, str(e))
+                if rt.ai_required:
+                    raise
+                return None
         if post.ai_status != AI_UNCHECKED:
             if rt.ai_required:
                 raise AIError(f"required AI caption is unavailable (status={post.ai_status})")
             return None
+        if not allow_links:
+            post = replace(post, text=filter_source_content(post.text, source_entities)[0])
         if not post.text.strip() and not image:
             await self.db.set_ai(post.id, AI_NO_PREVIEW)
             if rt.ai_required:
@@ -247,7 +275,7 @@ class Worker:
         await self.db.set_ai(post.id, AI_PROCESSING)
         log.info("ai start post=%s", post.id)
         try:
-            cap = await asyncio.wait_for(generate_caption(rt, post.text, image), rt.ai_timeout + 15)
+            cap = caption_text(await asyncio.wait_for(generate_caption(rt, post.text, image), rt.ai_timeout + 15))
             await self.db.set_ai(post.id, AI_GENERATED, cap)
             log.info("ai done post=%s", post.id)
             await events.log_event(self.db, events.AI_GENERATED, post_id=post.id, message=(cap or "")[:200],
@@ -294,6 +322,15 @@ class Worker:
             if not msgs:
                 await self.db.mark(post.id, SKIPPED, "source messages deleted")
                 return log.info("skip post=%s: source deleted", post.id)
+            src_msg = next((m for m in msgs if m.message), None)
+            source_body = src_msg.message if src_msg else ''
+            source_entities = src_msg.entities if src_msg else None
+            allow_links = self._source_links_allowed(post, entity)
+            if not allow_links:
+                if is_advertisement(source_body) or is_advertisement(post.text):
+                    await self.db.mark(post.id, SKIPPED, 'Явная реклама из чужого канала')
+                    return log.info('skip post=%s: foreign advertisement', post.id)
+                source_body, source_entities = filter_source_content(source_body, source_entities)
             files, file_msgs = [], []
             for m in msgs:
                 if not isinstance(m.media, (MessageMediaPhoto, MessageMediaDocument)):
@@ -312,20 +349,24 @@ class Worker:
                 files.append(path)
                 file_msgs.append(m)
                 log.info("download done post=%s msg=%s %.1fs", post.id, m.id, time.monotonic() - t)
-            if not files and not post.text.strip():
+            if not files and not source_body.strip():
                 await self.db.mark(post.id, SKIPPED, "nothing to publish")
                 return
             image = await self._preview_image(msgs, files, tmp) if post.kind == PARSED and rt.ai_enabled else None
             try:
-                ai_text = await self._ai(post, image, rt)
+                ai_text = await self._ai(replace(post, text=source_body), image, rt, entity, source_entities)
             except (AIError, asyncio.TimeoutError) as e:
                 await self.db.mark(post.id, FAILED, f"AI_REQUIRED: {e}")
                 await events.log_event(self.db, events.PUBLISH_FAILED, level="error", post_id=post.id,
                                        message=f"AI_REQUIRED: {e}")
                 return
-            src_msg = next((m for m in msgs if m.message), None)
-            body = ai_text or (src_msg.message if src_msg else "")
-            body_ents = None if ai_text else (src_msg.entities if src_msg else None)
+            body = ai_text or source_body
+            body_ents = None if ai_text else source_entities
+            if not allow_links:
+                if is_advertisement(body):
+                    await self.db.mark(post.id, SKIPPED, 'Явная реклама из чужого канала')
+                    return
+                body, body_ents = filter_source_content(body, body_ents)
             caption, kept, fspecs = build_caption(body, body_ents, rt.footer, bool(files), self.cfg.premium)
             entities = await self._valid_custom_emojis((kept or []) + to_entities(fspecs))
             dest = await self._dest()

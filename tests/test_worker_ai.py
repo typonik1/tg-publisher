@@ -30,3 +30,23 @@ class RequiredAITests(unittest.IsolatedAsyncioTestCase):
         self.db.posts[0].update(ai_status="generated", ai_caption="ready")
         with patch("app.worker.generate_caption", AsyncMock(side_effect=AssertionError("unexpected request"))):
             self.assertEqual(await self.w._ai(to_post(self.db.posts[0]), None, await self.w.rt.view()), "ready")
+
+    async def test_saved_refusal_is_cleared_and_not_published(self):
+        self.db.posts[0].update(ai_status='generated', ai_caption='Я не могу генерировать контент сексуального характера.')
+        self.w.cfg.ai_required = False
+        self.assertIsNone(await self.w._ai(to_post(self.db.posts[0]), None, await self.w.rt.view()))
+        self.assertEqual(self.db.posts[0]['ai_status'], 'failed')
+        self.assertIsNone(self.db.posts[0]['ai_caption'])
+
+    async def test_saved_refusal_blocks_when_ai_required(self):
+        self.db.posts[0].update(ai_status='generated', ai_caption="I cannot assist with this request.")
+        with self.assertRaises(AIError):
+            await self.w._ai(to_post(self.db.posts[0]), None, await self.w.rt.view())
+
+    async def test_foreign_links_removed_before_ai_and_from_ai_output(self):
+        self.db.posts[0].update(ai_status='unchecked', text='Мем https://t.me/advertiser')
+        generate = AsyncMock(return_value='Подпись https://promo.example')
+        with patch('app.worker.generate_caption', generate):
+            caption = await self.w._ai(to_post(self.db.posts[0]), None, await self.w.rt.view())
+        self.assertEqual(generate.call_args.args[1], 'Мем')
+        self.assertEqual(caption, 'Подпись')

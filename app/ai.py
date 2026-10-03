@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import math
 import mimetypes
+import re
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -15,6 +16,36 @@ from .config import Config
 
 class AIError(RuntimeError):
     pass
+
+
+class AIRefusalError(AIError):
+    """Provider declined the task; its service response is not a caption."""
+
+
+_REFUSAL = re.compile(
+    r"^(?:(?:извините|извини|простите|к сожалению)[\s,.!:—-]*(?:но\s+)?)*"
+    r"(?:я\s+(?:не могу|не буду|не готов)\s+(?:генерировать|создавать|создать|"
+    r"комментировать|описать|описывать|помочь|помогать|выполнить|обрабатывать|"
+    r"предоставить|предоставлять|подписать|сделать)|"
+    r"(?:(?:i(?:['’]m| am) sorry|sorry|i apologize)[\s,.!:—-]*(?:but\s+)?)*"
+    r"i\s+(?:can(?:not|['’]t)|will not|won['’]t|am unable to)\s+(?:help|assist|"
+    r"generate|create|describe|comment|provide|comply|fulfill|process)|"
+    r"(?:этот|данный)\s+(?:запрос|контент)\s+(?:нарушает|противоречит)|"
+    r"(?:this|that)\s+(?:request|content)\s+(?:violates|goes against))",
+    re.IGNORECASE,
+)
+
+
+def is_refusal(text: str | None) -> bool:
+    return bool(_REFUSAL.match((text or '').lstrip(' \n\r\t\"\'«*')))
+
+
+def validate_caption(text: str | None) -> str:
+    if not isinstance(text, str) or not text.strip():
+        raise AIError('ai empty response')
+    if is_refusal(text):
+        raise AIRefusalError('Нейросеть отказалась создать подпись')
+    return text.strip()
 
 
 class AIRateLimitError(AIError):
@@ -88,9 +119,11 @@ async def generate_caption(cfg: Config, text: str, image_path: str | None = None
     if r.status_code != 200:
         raise AIError(f"ai http {r.status_code}: {r.text[:200]}")
     try:
-        out = r.json()["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, ValueError) as e:
+        choice = r.json()["choices"][0]
+        message = choice['message']
+        if message.get('refusal') or choice.get('finish_reason') == 'content_filter':
+            raise AIRefusalError('Нейросеть отказалась создать подпись')
+        out = message['content']
+    except (KeyError, IndexError, ValueError, TypeError) as e:
         raise AIError("ai bad response shape") from e
-    if not out:
-        raise AIError("ai empty response")
-    return out
+    return validate_caption(out)
