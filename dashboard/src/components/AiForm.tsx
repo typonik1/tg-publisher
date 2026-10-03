@@ -86,7 +86,7 @@ export default function AiForm({ initial }: { initial: any }) {
           </label>
         </div>
         <p className="mt-2 text-xs text-zinc-500">
-          Ключ хранится в защищённом файле volume на сервере, не в PostgreSQL и не возвращается браузеру.
+          Новый ключ из панели хранится в защищённом файле volume на сервере, не в PostgreSQL и не возвращается браузеру.
           {key.configured ? <> Текущий: <span className="font-mono text-zinc-300">{key.mask}</span>.</> : " Сейчас ключ не задан."}
         </p>
       </Card>
