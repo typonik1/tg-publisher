@@ -190,7 +190,7 @@ class Worker:
     async def scan_own(self, force=False, rt=None):
         rt = rt or await self.rt.view()
         last = float(await self.db.kv_get("own_scan_at", "0"))
-        if not force and time.time() - last < rt.own_scan_hours * 3600:
+        if not force and time.time() - last < self.cfg.own_scan_hours * 3600:
             return
         log.info("own channel scan start (limit %d)", self.cfg.own_scan_limit)
         dest = await self._dest()
