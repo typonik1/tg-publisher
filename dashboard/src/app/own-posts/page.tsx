@@ -2,6 +2,7 @@ import { pubFetch } from "@/lib/api";
 import ActionButton from "@/components/ActionButton";
 import { Empty, ErrorBox, PageHeader, Td, Th } from "@/components/ui";
 import RepostButton from "@/components/RepostButton";
+import MediaPreview from "@/components/MediaPreview";
 import { excerpt, fmtDate } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +31,7 @@ export default async function OwnPostsPage() {
           <table className="w-full">
             <thead>
               <tr>
+                <Th>Картинка</Th>
                 <Th>Дата</Th>
                 <Th>Реакции</Th>
                 <Th>Просмотры</Th>
@@ -42,6 +44,7 @@ export default async function OwnPostsPage() {
             <tbody>
               {items.map((o) => (
                 <tr key={o.group_key}>
+                  <Td><MediaPreview postId={o.group_key} thumbnail src={`/api/dash/own/preview?group_key=${encodeURIComponent(o.group_key)}`} /></Td>
                   <Td className="whitespace-nowrap text-xs text-zinc-500">{fmtDate(o.post_date)}</Td>
                   <Td>{o.reactions ?? 0}</Td>
                   <Td>{o.views ?? 0}</Td>

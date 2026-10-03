@@ -559,13 +559,47 @@ async def h_own(request: web.Request) -> web.Response:
 
 
 @handler
+async def h_own_preview(request: web.Request) -> web.Response:
+    ctx = request.app['ctx']
+    key = request.query.get('group_key', '').strip()
+    if not key or len(key) > 200:
+        raise ValueError('group_key обязателен')
+    row = await ctx.db.get_own(key)
+    if row is None:
+        raise LookupError('Материал архива не найден')
+    import hashlib
+    cache_key = 'own_' + hashlib.sha256(key.encode()).hexdigest()
+    try:
+        image = await ctx.worker.previews.get(cache_key, source_ref=ctx.cfg.destination,
+                                              source_msg_ids=row['msg_ids'])
+    except Exception as exc:
+        log.warning('own preview unavailable: %s', type(exc).__name__)
+        return jr({'error': 'Превью временно недоступно'}, status=503)
+    if image is None:
+        return web.Response(status=204, headers={'Cache-Control': 'no-store'})
+    return web.FileResponse(image, headers={'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=300'})
+
+
+@handler
 async def h_own_repost(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     body = await body_json(request)
     key = str(body.get("group_key") or "").strip()
     if not key or len(key) > 200:
         raise ValueError("group_key обязателен")
-    aid = await ctx.db.create_action("repost_own", {"group_key": key})
+    payload = {"group_key": key}
+    at = body.get('scheduled_at')
+    if at is not None:
+        if not isinstance(at, str):
+            raise ValueError('Ожидается дата и время с часовым поясом')
+        try:
+            date = datetime.fromisoformat(at.replace('Z', '+00:00'))
+        except ValueError as exc:
+            raise ValueError('Неверная дата публикации') from exc
+        if date.tzinfo is None or date <= datetime.now(timezone.utc):
+            raise ValueError('Выберите будущее время с часовым поясом')
+        payload['scheduled_at'] = date.isoformat()
+    aid = await ctx.db.create_action("repost_own", payload)
     return jr({"action_id": aid, "status": "pending"}, status=202)
 
 
@@ -623,6 +657,7 @@ def build_app(ctx: ApiContext, token: str) -> web.Application:
     r.add_post("/api/ai/test", h_ai_test)
     r.add_post("/api/own/scan", h_own_scan)
     r.add_get("/api/own", h_own)
+    r.add_get("/api/own/preview", h_own_preview)
     r.add_post("/api/own/repost", h_own_repost)
     r.add_get("/api/actions", h_actions)
     r.add_get("/api/actions/{id}", h_action)

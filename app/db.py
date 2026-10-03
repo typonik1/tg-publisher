@@ -401,18 +401,18 @@ class DB:
         await self._q("UPDATE own_posts SET last_reposted_at=now(), updated_at=now() WHERE group_key=%s",
                       (group_key,))
 
-    async def create_repost_from_own(self, own_sid, group_key: str, ids, date, text, reactions) -> int | None:
+    async def create_repost_from_own(self, own_sid, group_key: str, ids, date, text, reactions, scheduled_at=None) -> int | None:
         """Ручной репост своего поста через обычный publish pipeline. Защита от дублей:
         не создаём пост, если этот контент уже ушёл в канал или уже в очереди на отправку."""
         rows = await self._q("""
             INSERT INTO posts(source_id, kind, group_key, source_msg_ids, source_date, text, status,
-                              ai_status, attempts, reactions)
-            SELECT %s,'repost',%s,%s,%s,%s,'candidate','not_needed',1,%s
+                              ai_status, attempts, reactions, scheduled_at)
+            SELECT %s,'repost',%s,%s,%s,%s,'candidate','not_needed',1,%s,%s
             WHERE NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.dest_msg_ids && %s::bigint[])
               AND NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.source_msg_ids = %s::bigint[]
-                              AND r.status IN ('processing','pending','ambiguous'))
+                              AND r.status IN ('candidate','processing','pending','ambiguous'))
             RETURNING id""",
-            (own_sid, f"r{group_key}:{uuid.uuid4().hex[:8]}", ids, date, text, reactions, ids, ids))
+            (own_sid, f"r{group_key}:{uuid.uuid4().hex[:8]}", ids, date, text, reactions, scheduled_at, ids, ids))
         return rows[0]["id"] if rows else None
 
     # --- очередь: списки для панели ---

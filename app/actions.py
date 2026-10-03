@@ -177,11 +177,18 @@ async def h_repost_own(w, payload):
     if not row:
         raise ValueError("own post not found")
     own_sid = await w._own_sid()
-    pid = await w.db.create_repost_from_own(own_sid, key, row["msg_ids"], row["post_date"],
-                                            row["text"], row["reactions"])
+    scheduled_at = payload.get("scheduled_at")
+    args = (own_sid, key, row["msg_ids"], row["post_date"], row["text"], row["reactions"])
+    if scheduled_at:
+        from datetime import datetime
+        pid = await w.db.create_repost_from_own(*args, scheduled_at=datetime.fromisoformat(scheduled_at))
+    else:
+        pid = await w.db.create_repost_from_own(*args)
     if not pid:
         raise ValueError("этот пост уже публиковался — защита от дублей")
     await w.db.mark_own_reposted(key)
+    if scheduled_at:
+        return {"status": "candidate", "post_id": pid, "scheduled_at": scheduled_at}
     post = await w.db.claim_post_for_publish(pid)
     if post is None:
         raise ValueError("не удалось взять пост в работу")

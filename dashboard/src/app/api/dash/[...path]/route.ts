@@ -25,6 +25,7 @@ const ALLOWED: { method: string; re: RegExp }[] = [
   { method: "POST", re: /^ai\/test$/ },
   { method: "POST", re: /^own\/scan$/ },
   { method: "GET", re: /^own$/ },
+  { method: "GET", re: /^own\/preview$/ },
   { method: "POST", re: /^own\/repost$/ },
   { method: "GET", re: /^actions$/ },
   { method: "GET", re: /^actions\/[\w-]+$/ },
@@ -38,8 +39,8 @@ async function handle(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "not allowed" }, { status: 404 });
   }
   try {
-    if (method === "GET" && /^posts\/\d+\/preview$/.test(sub)) {
-      const upstream = await pubResponse(`/api/${sub}`);
+    if (method === "GET" && /^(posts\/\d+\/preview|own\/preview)$/.test(sub)) {
+      const upstream = await pubResponse(`/api/${sub}${req.nextUrl.search}`);
       if (upstream.status === 204) return new NextResponse(null, { status: 204 });
       if (!upstream.ok) {
         const data = await upstream.json().catch(() => ({}));
