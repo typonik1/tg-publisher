@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import shutil
 import tempfile
@@ -410,7 +411,7 @@ class Worker:
             iv = interval
             if callable(iv):
                 iv = iv()
-            if asyncio.isawaitable(iv):
+            if inspect.isawaitable(iv):
                 iv = await iv
             await asyncio.sleep(iv)
 
