@@ -8,6 +8,21 @@ export const STATUS_LABELS: Record<string, string> = {
   candidate: "Готов к отбору", pending: "Ожидает повтора", processing: "Обрабатывается", published: "Опубликован", failed: "Ошибка", ambiguous: "Нужно проверить", skipped: "Пропущен", expired: "Устарел", unchecked: "Не проверен", generated: "Текст готов", not_needed: "Не требуется", no_preview: "Нет превью", manual: "Изменён вручную", parsed: "Новый пост", old: "Из архива", repost: "Повторная публикация", error: "Ошибка", warning: "Предупреждение", info: "Информация", completed: "Выполнено", pending_action: "В очереди", publish_now: "Опубликовать сейчас", skip_post: "Пропустить пост", requeue_post: "Повторить обработку", generate_ai: "Создать текст AI", scan_own: "Обновить архив",
 };
 
+Object.assign(STATUS_LABELS, {
+  settings_updated: "Настройки сохранены", worker_started: "Бот запущен",
+  source_collected: "Новые посты найдены", source_error: "Ошибка источника",
+  source_added: "Источник добавлен", source_verified: "Источник проверен",
+  source_backfilled: "Посты источника загружены", source_deleted: "Источник удалён",
+  source_enabled: "Источник включён", source_disabled: "Источник выключен",
+  own_scanned: "Архив обновлён", ai_generated: "Подпись создана", ai_failed: "Ошибка нейросети",
+  publish_started: "Публикация началась", publish_completed: "Пост опубликован",
+  publish_failed: "Публикация не удалась", publish_retry: "Назначен повтор",
+  publish_ambiguous: "Результат отправки требует проверки",
+  action_completed: "Команда выполнена", action_failed: "Ошибка команды",
+  test_ai_provider: "Проверка нейросети", repost_own: "Повторить пост из архива",
+  add_source: "Добавить источник", verify_source: "Проверить источник",
+  backfill_source: "Загрузить посты источника", already_published: "Уже опубликован",
+});
 export function humanLabel(value?: string | null): string { if (!value) return "—"; return STATUS_LABELS[value] ?? value.replaceAll("_", " "); }
 export function Badge({ v, children }: { v: string; children?: ReactNode }) { const cls = COLORS[v] ?? "border-slate-500/25 bg-slate-500/10 text-slate-300"; return <span className={`inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-semibold ${cls}`}>{children ?? humanLabel(v)}</span>; }
 export function PageHeader({ eyebrow = "Publisher", title, description, action }: { eyebrow?: string; title: ReactNode; description?: ReactNode; action?: ReactNode }) { return <header className="page-header"><div><div className="page-eyebrow">{eyebrow}</div><h1 className="page-title">{title}</h1>{description ? <div className="page-description">{description}</div> : null}</div>{action}</header>; }
