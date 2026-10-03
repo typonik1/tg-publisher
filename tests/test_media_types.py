@@ -30,6 +30,10 @@ class MediaTests(unittest.TestCase):
   self.assertEqual(msg_stats(msgs),{'views':100,'reactions':8,'forwards':4,'replies':2,'media_type':'photo'})
 
 class MediaDBTests(unittest.IsolatedAsyncioTestCase):
+ async def test_archive_scan_uses_config_interval(self):
+  import time
+  w=object.__new__(Worker);w.cfg=SimpleNamespace(own_scan_hours=6);w.db=SimpleNamespace(kv_get=AsyncMock(return_value=str(time.time())));w._dest=AsyncMock()
+  await w.scan_own(rt=SimpleNamespace());w._dest.assert_not_awaited()
  async def test_candidate_and_repost_store_format(self):
   db=object.__new__(DB);db._q=AsyncMock(return_value=[{'id':1}]);date=datetime.now(timezone.utc)
   st={'views':1,'reactions':2,'forwards':0,'replies':0,'media_type':'video'}
