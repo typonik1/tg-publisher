@@ -14,9 +14,9 @@ type Props = {
 };
 
 const VARIANTS = {
-  default: "border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-zinc-200",
-  primary: "border-sky-700 bg-sky-800 hover:bg-sky-700 text-sky-100",
-  danger: "border-red-800 bg-red-900/70 hover:bg-red-800 text-red-200",
+  default: "button-secondary",
+  primary: "button-primary",
+  danger: "button-danger",
 };
 
 async function pollAction(id: string): Promise<any> {
@@ -99,12 +99,12 @@ export default function ActionButton({
       <button
         onClick={run}
         disabled={state === "run"}
-        className={`rounded border px-2 py-1 text-xs disabled:opacity-50 ${VARIANTS[variant]}`}
+        className={`${VARIANTS[variant]} disabled:cursor-not-allowed disabled:opacity-50`}
       >
-        {state === "run" ? "…" : label}
+        {state === "run" ? "Выполняется…" : label}
       </button>
       {msg && (
-        <span className={`text-xs ${state === "err" ? "text-red-400" : "text-emerald-400"}`}>{msg}</span>
+        <span role="status" className={`max-w-xs text-xs ${state === "err" ? "text-red-300" : "text-emerald-300"}`}>{msg}</span>
       )}
     </span>
   );

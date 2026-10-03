@@ -6,12 +6,13 @@ import logging
 import shutil
 import tempfile
 import time
+from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from telethon import errors
-from telethon.tl.types import (MessageEntityCustomEmoji, MessageEntityTextUrl,
+from telethon import errors, functions
+from telethon.tl.types import (Document, MessageEntityCustomEmoji, MessageEntityTextUrl,
                                MessageMediaDocument, MessageMediaPhoto)
 
 from . import __version__, events
@@ -22,6 +23,7 @@ from .db import DB
 from .logic import (AI_FAILED, AI_GENERATED, AI_NO_PREVIEW, AI_PROCESSING, AI_UNCHECKED, AMBIGUOUS, FAILED,
                     OLD, PARSED, SKIPPED, backoff_seconds, build_caption, due_slot, group_messages, in_window)
 from .settings import RuntimeSettings
+from .media import album_kind, media_batches, prepare_media
 from .tg import ensure_connected, resolve
 
 log = logging.getLogger("worker")
@@ -234,9 +236,13 @@ class Worker:
         if post.ai_status == AI_GENERATED:
             return post.ai_caption
         if post.ai_status != AI_UNCHECKED:
+            if rt.ai_required:
+                raise AIError(f"required AI caption is unavailable (status={post.ai_status})")
             return None
         if not post.text.strip() and not image:
             await self.db.set_ai(post.id, AI_NO_PREVIEW)
+            if rt.ai_required:
+                raise AIError("required AI caption has no text or preview")
             return None
         await self.db.set_ai(post.id, AI_PROCESSING)
         log.info("ai start post=%s", post.id)
@@ -269,6 +275,17 @@ class Worker:
                     log.warning("thumb download failed msg=%s: %s", m.id, e)
         return None
 
+    async def _valid_custom_emojis(self, entities):
+        ids = list({e.document_id for e in entities if isinstance(e, MessageEntityCustomEmoji)})
+        if not ids:
+            return entities
+        docs = await self.client(functions.messages.GetCustomEmojiDocumentsRequest(ids))
+        valid = {d.id for d in docs if isinstance(d, Document)}
+        if len(valid) != len(ids):
+            log.warning("invalid custom emoji IDs %s: using ordinary emoji", sorted(set(ids) - valid))
+        # Keep Unicode text and links; invalid IDs must not reject the whole album.
+        return [e for e in entities if not isinstance(e, MessageEntityCustomEmoji) or e.document_id in valid]
+
     # ================= публикация =================
     async def _publish(self, post, tmp, rt):
         try:
@@ -277,7 +294,7 @@ class Worker:
             if not msgs:
                 await self.db.mark(post.id, SKIPPED, "source messages deleted")
                 return log.info("skip post=%s: source deleted", post.id)
-            files = []
+            files, file_msgs = [], []
             for m in msgs:
                 if not isinstance(m.media, (MessageMediaPhoto, MessageMediaDocument)):
                     continue
@@ -287,10 +304,13 @@ class Worker:
                     continue
                 log.info("download start post=%s msg=%s dc=%s", post.id, m.id, _dc(m))
                 t = time.monotonic()
-                path = await self.client.download_media(m, file=tmp + "/")
+                media_dir = Path(tmp) / str(m.id)
+                media_dir.mkdir(exist_ok=True)
+                path = await self.client.download_media(m, file=str(media_dir) + "/")
                 if not path:
                     raise RuntimeError(f"download returned nothing for msg {m.id}")
                 files.append(path)
+                file_msgs.append(m)
                 log.info("download done post=%s msg=%s %.1fs", post.id, m.id, time.monotonic() - t)
             if not files and not post.text.strip():
                 await self.db.mark(post.id, SKIPPED, "nothing to publish")
@@ -307,8 +327,11 @@ class Worker:
             body = ai_text or (src_msg.message if src_msg else "")
             body_ents = None if ai_text else (src_msg.entities if src_msg else None)
             caption, kept, fspecs = build_caption(body, body_ents, rt.footer, bool(files), self.cfg.premium)
-            entities = (kept or []) + to_entities(fspecs)
+            entities = await self._valid_custom_emojis((kept or []) + to_entities(fspecs))
             dest = await self._dest()
+            # Upload before marking send_started; these RPCs do not publish a post.
+            prepared = [(await prepare_media(self.client, m, path), album_kind(m))
+                        for m, path in zip(file_msgs, files)]
         except errors.FloodWaitError as e:
             await self.db.retry_later(post.id, e.seconds + 5, f"FloodWait {e.seconds}s before send")
             return log.warning("post=%s flood wait %ss (pre-send), requeued", post.id, e.seconds)
@@ -319,17 +342,29 @@ class Worker:
         log.info("publish start post=%s kind=%s files=%d", post.id, post.kind, len(files))
         await events.log_event(self.db, events.PUBLISH_STARTED, post_id=post.id,
                                message=f"kind={post.kind} files={len(files)}")
+        ids = []
         try:
             if files:
-                sent = await self.client.send_file(dest, files if len(files) > 1 else files[0], caption=caption,
-                                                   formatting_entities=entities, parse_mode=None)
+                for batch in media_batches(prepared):
+                    sent = await self.client.send_file(
+                        dest, batch if len(batch) > 1 else batch[0],
+                        caption=caption if not ids else "",
+                        formatting_entities=entities if not ids else [], parse_mode=None)
+                    ids.extend(s.id for s in (sent if isinstance(sent, list) else [sent]))
+                    # A crash/next-batch failure must never retry already published media.
+                    await self.db.record_sent(post.id, ids)
             else:
                 sent = await self.client.send_message(dest, caption, formatting_entities=entities,
                                                       parse_mode=None, link_preview=False)
+                ids = [sent.id]
         except errors.FloodWaitError as e:
+            if ids:
+                return await self._partial_send_failure(post, ids, e)
             await self.db.retry_later(post.id, e.seconds + 5, f"FloodWait {e.seconds}s on send")
             return log.warning("post=%s flood wait on send, requeued", post.id)
         except errors.RPCError as e:
+            if ids:
+                return await self._partial_send_failure(post, ids, e)
             return await self._pre_send_failure(post, e, rt)
         except UNCERTAIN as e:
             await self.db.mark(post.id, AMBIGUOUS, f"network error during send: {type(e).__name__}")
@@ -337,7 +372,10 @@ class Worker:
             await events.log_event(self.db, events.PUBLISH_AMBIGUOUS, level="error", post_id=post.id,
                                    message=f"{type(e).__name__} during send, check channel then requeue")
             raise
-        ids = [s.id for s in (sent if isinstance(sent, list) else [sent])]
+        except Exception as e:
+            # Includes persistence failures after a confirmed send. Do not send the next batch.
+            await self._partial_send_failure(post, ids, e)
+            raise
         log.info("publish done post=%s dest_ids=%s", post.id, ids)
         for i in range(5):
             try:
@@ -348,6 +386,13 @@ class Worker:
             except Exception as e:
                 log.error("post=%s persist dest_ids failed (try %d): %s", post.id, i + 1, e)
                 await asyncio.sleep(2 ** i)
+
+    async def _partial_send_failure(self, post, ids, e):
+        err = f"partial send dest_ids={ids}: {type(e).__name__}: {e}"
+        await self.db.mark(post.id, AMBIGUOUS, err)
+        log.error("post=%s AMBIGUOUS: %s", post.id, err)
+        await events.log_event(self.db, events.PUBLISH_AMBIGUOUS, level="error", post_id=post.id,
+                               message=err, metadata={"dest_msg_ids": ids})
 
     async def _pre_send_failure(self, post, e, rt):
         err = f"{type(e).__name__}: {e}"

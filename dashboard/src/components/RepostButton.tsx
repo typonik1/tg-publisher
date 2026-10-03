@@ -7,10 +7,10 @@ export default function RepostButton({ groupKey }: { groupKey: string }) {
     <ActionButton
       path="own/repost"
       body={{ group_key: groupKey }}
-      label="Репост"
+      label="Опубликовать снова"
       variant="primary"
       confirm="Опубликовать этот пост в канал сейчас?"
-      doneLabel="готово"
+      doneLabel="добавлено в публикацию"
     />
   );
 }

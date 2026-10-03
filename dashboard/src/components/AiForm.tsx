@@ -10,17 +10,18 @@ export default function AiForm({ initial }: { initial: any }) {
   const [required, setRequired] = useState(!!initial?.ai_required);
   const [baseUrl, setBaseUrl] = useState(initial?.ai_base_url ?? "");
   const [model, setModel] = useState(initial?.ai_model ?? "");
+  const [apiKey, setApiKey] = useState("");
+  const [clearApiKey, setClearApiKey] = useState(false);
   const [prompt, setPrompt] = useState(initial?.ai_prompt ?? "");
   const [timeout_, setTimeout_] = useState(initial?.ai_timeout ?? 40);
-  const [apiKey, setApiKey] = useState("");
-  const [clearKey, setClearKey] = useState(false);
   const [testText, setTestText] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const router = useRouter();
 
-  const key = initial?.api_key ?? { configured: false, mask: "" };
+  const keyConfigured = !!initial?.api_key_configured;
+  const keyMask = initial?.api_key?.mask ?? "";
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -38,15 +39,15 @@ export default function AiForm({ initial }: { initial: any }) {
           ai_model: model,
           ai_prompt: prompt,
           ai_timeout: Number(timeout_),
-          ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-          ...(clearKey ? { clear_api_key: true } : {}),
+          ...(apiKey.trim() ? { api_key: apiKey } : {}),
+          ...(clearApiKey ? { clear_api_key: true } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || `ошибка ${res.status}`);
       setApiKey("");
-      setClearKey(false);
-      setMsg("сохранено — действует сразу, без рестарта");
+      setClearApiKey(false);
+      setMsg("Настройки сохранены и уже используются ботом");
       router.refresh();
     } catch (e: any) {
       setErr(e?.message ?? "ошибка");
@@ -57,82 +58,108 @@ export default function AiForm({ initial }: { initial: any }) {
 
   return (
     <div className="space-y-4">
-      <Card title="API-ключ">
-        <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
-          <label className="text-xs text-zinc-400">
-            Новый API key
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => {
-                setApiKey(e.target.value);
-                if (e.target.value) setClearKey(false);
-              }}
-              placeholder={key.configured ? `Сейчас: ${key.mask} · оставь пустым, чтобы не менять` : "Вставь API key"}
-              className={`mt-1 w-full ${INPUT}`}
-              autoComplete="off"
-            />
+      <Card title="Подключение к нейросети">
+        <form onSubmit={save} className="grid gap-5 md:grid-cols-2">
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 text-sm text-zinc-200">
+            <input className="mt-0.5" type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            <span>
+              <span className="block font-medium">Использовать нейросеть</span>
+              <span className="mt-1 block text-xs font-normal text-zinc-500">Бот будет улучшать подписи перед публикацией.</span>
+            </span>
           </label>
-          <label className="flex items-center gap-2 pb-2 text-xs text-zinc-400">
-            <input
-              type="checkbox"
-              checked={clearKey}
-              onChange={(e) => {
-                setClearKey(e.target.checked);
-                if (e.target.checked) setApiKey("");
-              }}
-            />
-            удалить сохранённый ключ
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 text-sm text-zinc-200">
+            <input className="mt-0.5" type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} />
+            <span>
+              <span className="block font-medium">Не публиковать при ошибке AI</span>
+              <span className="mt-1 block text-xs font-normal text-zinc-500">Если выключено, бот опубликует исходную подпись.</span>
+            </span>
           </label>
-        </div>
-        <p className="mt-2 text-xs text-zinc-500">
-          Новый ключ из панели хранится в защищённом файле volume на сервере, не в PostgreSQL и не возвращается браузеру.
-          {key.configured ? <> Текущий: <span className="font-mono text-zinc-300">{key.mask}</span>.</> : " Сейчас ключ не задан."}
-        </p>
-      </Card>
 
-      <Card title="Параметры AI">
-        <form onSubmit={save} className="grid gap-3 md:grid-cols-2">
-          <label className="flex items-center gap-2 text-sm text-zinc-300">
-            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-            AI включён
+          <label className="text-sm text-zinc-300 md:col-span-2">
+            Адрес API
+            <input
+              type="url"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="https://api.openai.com/v1"
+              className={`mt-1.5 w-full ${INPUT}`}
+            />
+            <span className="mt-1 block text-xs text-zinc-500">Укажите адрес сервиса в формате OpenAI API, включая /v1.</span>
           </label>
-          <label className="flex items-center gap-2 text-sm text-zinc-300">
-            <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} />
-            Обязателен (AI_REQUIRED: сбой блокирует публикацию)
-          </label>
-          <label className="text-xs text-zinc-500">
-            Base URL
-            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} className={`w-full ${INPUT}`} />
-          </label>
-          <label className="text-xs text-zinc-500">
+
+          <label className="text-sm text-zinc-300">
             Модель
-            <input value={model} onChange={(e) => setModel(e.target.value)} className={`w-full ${INPUT}`} />
+            <input
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="gpt-4o-mini"
+              className={`mt-1.5 w-full ${INPUT}`}
+            />
+            <span className="mt-1 block text-xs text-zinc-500">Точное имя модели у выбранного сервиса.</span>
           </label>
-          <label className="text-xs text-zinc-500">
-            Таймаут, сек (5..300)
+          <label className="text-sm text-zinc-300">
+            Максимальное время ответа
             <input
               type="number"
+              min={5}
+              max={300}
               value={timeout_}
               onChange={(e) => setTimeout_(Number(e.target.value))}
-              className={`w-full ${INPUT}`}
+              className={`mt-1.5 w-full ${INPUT}`}
             />
+            <span className="mt-1 block text-xs text-zinc-500">От 5 до 300 секунд.</span>
           </label>
-          <label className="text-xs text-zinc-500 md:col-span-2">
-            Промпт
+
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 md:col-span-2">
+            <label className="text-sm text-zinc-300">
+              API-ключ
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={apiKey}
+                disabled={clearApiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={keyConfigured ? "Оставьте пустым, чтобы сохранить текущий ключ" : "Вставьте API-ключ"}
+                className={`mt-1.5 w-full ${INPUT} disabled:cursor-not-allowed disabled:opacity-50`}
+              />
+            </label>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className={keyConfigured ? "text-emerald-400" : "text-amber-400"}>
+                {keyConfigured ? <>Ключ подключён: <span className="font-mono">{keyMask}</span></> : "Ключ ещё не задан"}
+              </span>
+              {keyConfigured && (
+                <label className="flex cursor-pointer items-center gap-2 text-zinc-400">
+                  <input
+                    type="checkbox"
+                    checked={clearApiKey}
+                    onChange={(e) => {
+                      setClearApiKey(e.target.checked);
+                      if (e.target.checked) setApiKey("");
+                    }}
+                  />
+                  Удалить сохранённый ключ
+                </label>
+              )}
+            </div>
+            <p className="mt-2 text-xs text-zinc-500">Ключ хранится на сервере. Панель показывает только последние 4 символа.</p>
+          </div>
+
+          <label className="text-sm text-zinc-300 md:col-span-2">
+            Инструкция для нейросети
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              rows={4}
-              className={`w-full ${INPUT}`}
+              rows={6}
+              className={`mt-1.5 w-full ${INPUT}`}
             />
+            <span className="mt-1 block text-xs text-zinc-500">Опишите стиль, длину и правила для новых подписей.</span>
           </label>
-          <div className="flex items-center gap-3 md:col-span-2">
+          <div className="flex flex-wrap items-center gap-3 md:col-span-2">
             <button
               disabled={busy}
-              className="rounded border border-sky-700 bg-sky-800 px-3 py-1.5 text-sm hover:bg-sky-700 disabled:opacity-50"
+              className="rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-sky-500 disabled:opacity-50"
             >
-              {busy ? "сохранение…" : "Сохранить"}
+              {busy ? "Сохраняем…" : "Сохранить настройки"}
             </button>
             {msg && <span className="text-xs text-emerald-400">{msg}</span>}
             {err && <span className="text-xs text-red-400">{err}</span>}
@@ -140,19 +167,17 @@ export default function AiForm({ initial }: { initial: any }) {
         </form>
       </Card>
 
-      <Card title="Проверить AI (без публикации)">
-        <div className="flex flex-wrap items-center gap-2">
+      <Card title="Проверка подключения">
+        <p className="mb-3 text-sm text-zinc-400">Отправьте пробный текст. Бот ничего не опубликует, а только проверит настройки.</p>
+        <div className="flex flex-wrap items-center gap-3">
           <input
             value={testText}
             onChange={(e) => setTestText(e.target.value)}
-            placeholder="текст для теста (необязательно)"
-            className={`w-96 ${INPUT}`}
+            placeholder="Например: Сделай короткую подпись"
+            className={`min-w-64 flex-1 ${INPUT}`}
           />
-          <ActionButton path="ai/test" body={{ text: testText }} label="Проверить AI" variant="primary" doneLabel="AI ответил" />
+          <ActionButton path="ai/test" body={{ text: testText }} label="Отправить тест" variant="primary" doneLabel="Нейросеть ответила" />
         </div>
-        <p className="mt-2 text-xs text-zinc-500">
-          Если AI_REQUIRED выключен, сбой AI не блокирует публикацию — уйдёт оригинальная подпись.
-        </p>
       </Card>
     </div>
   );

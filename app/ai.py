@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import base64
+import math
 import mimetypes
+import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -11,6 +15,40 @@ from .config import Config
 
 class AIError(RuntimeError):
     pass
+
+
+class AIRateLimitError(AIError):
+    """AI provider rate limit with the delay before another request is allowed."""
+
+    def __init__(self, message: str, retry_after: int):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+_cooldowns: dict[tuple[str, str, str], float] = {}
+
+
+def _cooldown_key(cfg: Config) -> tuple[str, str, str]:
+    return (cfg.ai_base_url, cfg.ai_api_key, cfg.ai_model)
+
+
+def _retry_after(response: httpx.Response) -> int:
+    value = response.headers.get("Retry-After", "").strip()
+    if value:
+        try:
+            return max(1, math.ceil(float(value)))
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(value)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                return max(1, math.ceil((retry_at - datetime.now(timezone.utc)).total_seconds()))
+            except (TypeError, ValueError, OverflowError):
+                pass
+    body = response.text.lower()
+    if "daily" in body or "today's" in body or "today’s" in body:
+        return 3600
+    return 60
 
 
 def _user_content(text: str, image_path: str | None):
@@ -24,6 +62,13 @@ def _user_content(text: str, image_path: str | None):
 
 
 async def generate_caption(cfg: Config, text: str, image_path: str | None = None) -> str:
+    key = _cooldown_key(cfg)
+    now = time.monotonic()
+    blocked_until = _cooldowns.get(key, 0)
+    if blocked_until > now:
+        retry_after = max(1, math.ceil(blocked_until - now))
+        raise AIRateLimitError(f"ai rate limit cooldown: retry after {retry_after}s", retry_after)
+    _cooldowns.pop(key, None)
     timeout = httpx.Timeout(cfg.ai_timeout, connect=10)
     try:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as http:
@@ -36,6 +81,10 @@ async def generate_caption(cfg: Config, text: str, image_path: str | None = None
             )
     except httpx.HTTPError as e:
         raise AIError(f"ai network error: {type(e).__name__}") from e
+    if r.status_code == 429:
+        retry_after = _retry_after(r)
+        _cooldowns[key] = time.monotonic() + retry_after
+        raise AIRateLimitError(f"ai http 429: retry after {retry_after}s: {r.text[:200]}", retry_after)
     if r.status_code != 200:
         raise AIError(f"ai http {r.status_code}: {r.text[:200]}")
     try:

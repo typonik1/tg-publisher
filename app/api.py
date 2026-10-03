@@ -19,6 +19,7 @@ from . import __version__, events
 from .actions import BACKFILL_SIZES
 from .db import POST_STATUSES
 from .logic import next_slot, render_footer
+from .settings import footer_for_api
 
 log = logging.getLogger("api")
 
@@ -34,7 +35,7 @@ def jr(data, status: int = 200) -> web.Response:
 
 
 def mask_key(key: str) -> dict:
-    """Секрет не возвращаем никогда: только configured + маска."""
+    """Секрет не возвращаем никогда: только статус и необратимая маска с хвостом."""
     if not key:
         return {"configured": False, "mask": ""}
     tail = key[-4:] if len(key) >= 12 else ""
@@ -366,7 +367,7 @@ async def h_schedule_put(request: web.Request) -> web.Response:
 async def h_settings_get(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     footer = await ctx.settings.get("footer")
-    return jr({"footer": footer, "preview": render_footer(footer)[0], "premium": ctx.cfg.premium})
+    return jr({"footer": footer_for_api(footer), "preview": render_footer(footer)[0], "premium": ctx.cfg.premium})
 
 
 @handler
@@ -377,15 +378,18 @@ async def h_settings_put(request: web.Request) -> web.Response:
         raise ValueError("footer обязателен")
     cleaned = await ctx.settings.update("footer", {"footer": body["footer"]})
     await events.log_event(ctx.db, events.SETTINGS_UPDATED, message="footer", metadata={"keys": ["footer"]})
-    return jr({"ok": True, "footer": cleaned["footer"], "preview": render_footer(cleaned["footer"])[0]})
+    return jr({"ok": True, "footer": footer_for_api(cleaned["footer"]),
+               "preview": render_footer(cleaned["footer"])[0]})
 
 
 @handler
 async def h_ai_get(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     v = await ctx.settings.api_view()
+    runtime = await ctx.settings.view()
     data = {k: v[k] for k in ("ai_enabled", "ai_required", "ai_base_url", "ai_model", "ai_prompt", "ai_timeout")}
-    data["api_key"] = mask_key(ctx.settings.effective_ai_key())
+    data["api_key"] = mask_key(runtime.ai_api_key)
+    data["api_key_configured"] = bool(runtime.ai_api_key)
     data["api_key_env_only"] = False
     return jr(data)
 
@@ -394,22 +398,26 @@ async def h_ai_get(request: web.Request) -> web.Response:
 async def h_ai_put(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     body = await body_json(request)
-    changed = []
-    if "api_key" in body:
-        key = str(body.pop("api_key") or "").strip()
-        if key:
-            ctx.settings.set_ai_api_key(key)
-            changed.append("api_key")
-    if body.pop("clear_api_key", False):
-        ctx.settings.set_ai_api_key("")
-        changed.append("api_key_cleared")
-    cleaned = {}
+    clear_api_key = body.pop("clear_api_key", False)
+    if not isinstance(clear_api_key, bool):
+        raise ValueError("clear_api_key: ожидается true/false")
+
+    api_key = body.pop("api_key", None)
+    if api_key is not None and not isinstance(api_key, str):
+        raise ValueError("api_key: ожидается строка до 4096 символов")
+    api_key = api_key.strip() if isinstance(api_key, str) else ""
+    if clear_api_key and api_key:
+        raise ValueError("нельзя одновременно задать и удалить API-ключ")
+    if clear_api_key:
+        body["ai_api_key"] = ""
+    elif api_key:
+        body["ai_api_key"] = api_key
+
     if body:
         cleaned = await ctx.settings.update("ai", body)
-        changed.extend(sorted(cleaned))
-    if not changed:
-        raise ValueError("нет изменений")
-    await events.log_event(ctx.db, events.SETTINGS_UPDATED, message="ai", metadata={"keys": changed})
+        public_keys = ["api_key" if key == "ai_api_key" else key for key in sorted(cleaned)]
+        await events.log_event(ctx.db, events.SETTINGS_UPDATED, message="ai",
+                               metadata={"keys": public_keys})
     return await h_ai_get(request)
 
 

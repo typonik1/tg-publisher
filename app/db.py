@@ -406,8 +406,8 @@ class DB:
             INSERT INTO posts(source_id, kind, group_key, source_msg_ids, source_date, text, status,
                               ai_status, attempts, reactions)
             SELECT %s,'repost',%s,%s,%s,%s,'candidate','not_needed',1,%s
-            WHERE NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.dest_msg_ids && %s)
-              AND NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.source_msg_ids = %s
+            WHERE NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.dest_msg_ids && %s::bigint[])
+              AND NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.source_msg_ids = %s::bigint[]
                               AND r.status IN ('processing','pending','ambiguous'))
             RETURNING id""",
             (own_sid, f"r{group_key}:{uuid.uuid4().hex[:8]}", ids, date, text, reactions, ids, ids))
@@ -476,7 +476,14 @@ class DB:
 
     async def mark_published(self, pid, dest_ids: list[int]):
         await self._q("UPDATE posts SET status='published', dest_msg_ids=%s, published_at=now(), "
-                      "last_error=NULL, updated_at=now() WHERE id=%s", (dest_ids, pid))
+                        "last_error=NULL, updated_at=now() WHERE id=%s", (dest_ids, pid))
+
+    async def record_sent(self, pid, dest_ids: list[int]):
+        # Until the final batch completes, confirmed IDs represent a partial send.
+        # Recovery must not call it published, and requeue must reject confirmed IDs.
+        await self._q("UPDATE posts SET status='ambiguous', dest_msg_ids=%s, "
+                      "last_error='send in progress: confirmed partial media', updated_at=now() WHERE id=%s",
+                      (dest_ids, pid))
 
     async def mark(self, pid, status, error=None):
         await self._q("UPDATE posts SET status=%s, last_error=%s, updated_at=now() WHERE id=%s",

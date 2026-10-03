@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from pathlib import Path
 import time as _time
 from datetime import time as dtime
 from types import SimpleNamespace
@@ -17,6 +15,8 @@ log = logging.getLogger("settings")
 
 PREFIX = "rt:"
 CACHE_TTL_SEC = 10
+JS_SAFE_INTEGER = 2 ** 53 - 1
+INT64_MAX = 2 ** 63 - 1
 
 
 def _v_int(lo: int, hi: int):
@@ -57,6 +57,16 @@ def _v_str(maxlen: int):
     return v
 
 
+def _v_api_key(raw):
+    """API credential override. Empty is meaningful: it disables the ENV fallback."""
+    if not isinstance(raw, str):
+        raise ValueError("ожидается строка до 4096 символов")
+    value = raw.strip()
+    if len(value) > 4096:
+        raise ValueError("ожидается строка до 4096 символов")
+    return value
+
+
 def _v_url(raw):
     s = _v_str(200)(raw)
     if not s.startswith(("http://", "https://")):
@@ -91,6 +101,23 @@ def _v_pattern(raw):
 def _v_footer(raw):
     if not isinstance(raw, list) or not raw:
         raise ValueError("footer должен быть непустым списком строк")
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("footer: каждый элемент должен быть объектом")
+        emoji_id = item.get("emoji_id")
+        if emoji_id is None or emoji_id == "":
+            continue
+        if isinstance(emoji_id, bool) or isinstance(emoji_id, float):
+            raise ValueError("footer: emoji_id должен быть целым числом в строке")
+        if isinstance(emoji_id, int):
+            if emoji_id < 1 or emoji_id > JS_SAFE_INTEGER:
+                raise ValueError("footer: большой emoji_id передавайте строкой")
+            continue
+        if not isinstance(emoji_id, str) or not emoji_id.isascii() or not emoji_id.isdigit():
+            raise ValueError("footer: emoji_id должен быть целым числом в строке")
+        parsed_id = int(emoji_id)
+        if parsed_id < 1 or parsed_id > INT64_MAX:
+            raise ValueError("footer: emoji_id вне допустимого диапазона")
     items = parse_footer(json.dumps(raw, ensure_ascii=False))
     for it in items:
         if len(str(it.get("text", ""))) > 128 or len(str(it.get("url", ""))) > 256:
@@ -98,6 +125,18 @@ def _v_footer(raw):
         if len(str(it.get("emoji", ""))) > 16:
             raise ValueError("footer: emoji слишком длинный")
     return items
+
+
+def footer_for_api(items: list[dict]) -> list[dict]:
+    """Copy footer values for JSON without exposing 64-bit Telegram IDs as JS numbers."""
+    out = []
+    for item in items:
+        public_item = dict(item)
+        emoji_id = public_item.get("emoji_id")
+        if emoji_id is not None:
+            public_item["emoji_id"] = str(emoji_id)
+        out.append(public_item)
+    return out
 
 
 VALIDATORS = {
@@ -114,6 +153,7 @@ VALIDATORS = {
     "publishing_paused": _v_bool,
     "ai_enabled": _v_bool,
     "ai_required": _v_bool,
+    "ai_api_key": _v_api_key,
     "ai_base_url": _v_url,
     "ai_model": _v_str(200),
     "ai_prompt": _v_str(4000),
@@ -125,7 +165,7 @@ SECTIONS = {
     "schedule": ["tz_name", "publish_times", "schedule_pattern", "candidate_min_age_min",
                  "max_post_age_hours", "best_min_score", "baseline_days", "own_min_age_days",
                  "repost_cooldown_days", "collect_interval", "publishing_paused"],
-    "ai": ["ai_enabled", "ai_required", "ai_base_url", "ai_model", "ai_prompt", "ai_timeout"],
+    "ai": ["ai_enabled", "ai_required", "ai_api_key", "ai_base_url", "ai_model", "ai_prompt", "ai_timeout"],
     "footer": ["footer"],
 }
 
@@ -187,46 +227,10 @@ class RuntimeSettings:
         return v
 
     async def view(self) -> SimpleNamespace:
-        """Синхронный снимок для воркера: все runtime-ключи + ai_api_key (только ENV)."""
+        """Снимок для воркера: публичные настройки и runtime/ENV AI-ключ."""
         ov = await self._overrides()
         d = {k: self._resolved(k, ov) for k in VALIDATORS}
-        d["ai_api_key"] = self.effective_ai_key()
         return SimpleNamespace(**d)
-
-
-    def effective_ai_key(self) -> str:
-        """Runtime AI key: persistent secret file wins, ENV is fallback."""
-        path = Path(self.cfg.ai_api_key_file)
-        try:
-            if path.exists():
-                value = path.read_text(encoding="utf-8").strip()
-                if value:
-                    return value
-        except OSError as e:
-            log.warning("cannot read AI key file: %s", e)
-        return self.cfg.ai_api_key
-
-    def set_ai_api_key(self, value: str) -> None:
-        """Persist secret outside DB. Never log or return the value."""
-        value = str(value or "").strip()
-        if len(value) > 4096:
-            raise SettingsError("api_key слишком длинный")
-        path = Path(self.cfg.ai_api_key_file)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not value:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as e:
-                raise SettingsError(f"не удалось удалить сохранённый API key: {e}") from e
-            return
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        try:
-            tmp.write_text(value, encoding="utf-8")
-            os.chmod(tmp, 0o600)
-            tmp.replace(path)
-            os.chmod(path, 0o600)
-        except OSError as e:
-            raise SettingsError(f"не удалось сохранить API key: {e}") from e
 
     async def get(self, key: str):
         ov = await self._overrides()
@@ -237,9 +241,13 @@ class RuntimeSettings:
         ov = await self._overrides()
         out = {}
         for k in VALIDATORS:
+            if k == "ai_api_key":
+                continue
             v = self._resolved(k, ov)
             if k == "publish_times":
                 v = [t.strftime("%H:%M") for t in v]
+            elif k == "footer":
+                v = footer_for_api(v)
             out[k] = v
         return out
 

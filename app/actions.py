@@ -149,7 +149,7 @@ async def h_scan_own(w, payload):
 async def h_test_ai_provider(w, payload):
     rt = await w.rt.view()
     if not rt.ai_enabled:
-        raise ValueError("AI выключен: включи его в разделе AI (ключ задаётся через ENV AI_API_KEY)")
+        raise ValueError("Нейросеть выключена: включите её и задайте API-ключ в разделе Нейросеть")
     text = str(payload.get("text") or "Тест AI из панели управления").strip()[:500]
     cap = await generate_caption(rt, text, None)
     return {"ok": True, "model": rt.ai_model, "reply": cap[:300]}
