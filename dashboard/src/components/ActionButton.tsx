@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { humanLabel } from "@/components/ui";
 
 type Props = {
   path: string;
@@ -37,7 +38,7 @@ async function pollAction(id: string): Promise<any> {
 
 function summarize(r: any): string {
   if (!r || typeof r !== "object") return "";
-  if (typeof r.status === "string") return r.status;
+  if (typeof r.status === "string") return r.status === "already_published" ? "Уже опубликован" : humanLabel(r.status);
   if (r.added !== undefined) return `+${r.added}`;
   if (r.posts !== undefined) return `${r.posts} постов`;
   if (typeof r.reply === "string" && r.reply) return r.reply.slice(0, 80);
@@ -77,6 +78,12 @@ export default function ActionButton({
       if (data?.action_id) {
         const done = await pollAction(data.action_id);
         if (done.status === "completed") {
+          if (["failed", "ambiguous", "pending", "skipped"].includes(done.result?.status)) {
+            throw new Error(`Публикация не завершена: ${humanLabel(done.result.status)}. Подробности — в карточке поста.`);
+          }
+          if (done.result?.ai_status && !["generated", "manual"].includes(done.result.ai_status)) {
+            throw new Error(`Текст не создан: ${humanLabel(done.result.ai_status)}. Подробности — в истории.`);
+          }
           setState("ok");
           setMsg(`${doneLabel}${summarize(done.result) ? `: ${summarize(done.result)}` : ""}`);
         } else {

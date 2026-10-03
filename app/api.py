@@ -11,6 +11,7 @@ import logging
 import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
+from urllib.parse import urlsplit
 
 from aiohttp import web
 from psycopg import errors as pg_errors
@@ -408,6 +409,14 @@ async def h_ai_put(request: web.Request) -> web.Response:
     api_key = api_key.strip() if isinstance(api_key, str) else ""
     if clear_api_key and api_key:
         raise ValueError("нельзя одновременно задать и удалить API-ключ")
+    if "ai_base_url" in body and not api_key and not clear_api_key:
+        current = await ctx.settings.view()
+        def origin(url):
+            parsed = urlsplit(url)
+            return (parsed.scheme.lower(), parsed.hostname,
+                    parsed.port or (443 if parsed.scheme == "https" else 80))
+        if current.ai_api_key and origin(str(body["ai_base_url"])) != origin(current.ai_base_url):
+            raise ValueError("Для смены сервиса нейросети введите новый API-ключ или удалите текущий")
     if clear_api_key:
         body["ai_api_key"] = ""
     elif api_key:

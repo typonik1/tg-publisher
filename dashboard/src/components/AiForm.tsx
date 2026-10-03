@@ -84,7 +84,7 @@ export default function AiForm({ initial }: { initial: any }) {
               placeholder="https://api.openai.com/v1"
               className={`mt-1.5 w-full ${INPUT}`}
             />
-            <span className="mt-1 block text-xs text-zinc-500">Укажите адрес сервиса в формате OpenAI API, включая /v1.</span>
+            <span className="mt-1 block text-xs text-zinc-500">Укажите адрес сервиса в формате OpenAI API, включая /v1. При смене сервиса введите новый ключ.</span>
           </label>
 
           <label className="text-sm text-zinc-300">

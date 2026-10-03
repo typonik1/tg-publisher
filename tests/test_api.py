@@ -120,6 +120,14 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.ai_base_url, "https://new-ai.example/v1")
         self.assertNotIn(secret, json.dumps(self.db.events))
 
+    async def test_provider_change_cannot_reuse_hidden_key(self):
+        r = await self.client.put("/api/ai", json={"ai_base_url": "https://other.example/v1"},
+                                  headers=self._h())
+        self.assertEqual(r.status, 400)
+        runtime = await self.w.rt.view()
+        self.assertEqual(runtime.ai_base_url, "https://ai.example/v1")
+        self.assertEqual(runtime.ai_api_key, self.cfg.ai_api_key)
+
     async def test_ai_blank_key_keeps_current_and_explicit_clear_removes_it(self):
         await self.client.put("/api/ai", json={"api_key": "sk-runtime-1234", "ai_model": "m1"},
                               headers=self._h())
