@@ -73,6 +73,8 @@ ALTER TABLE posts ADD COLUMN IF NOT EXISTS reactions INT NOT NULL DEFAULT 0;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS forwards INT NOT NULL DEFAULT 0;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS replies INT NOT NULL DEFAULT 0;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS posts_scheduled_idx ON posts (scheduled_at) WHERE scheduled_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS posts_status_idx ON posts (status, next_attempt_at);
 
 -- снимок собственного канала для репостов «старых залайканных»
@@ -320,18 +322,18 @@ class DB:
         score = 0.6 * ER/avgER + 0.4 * views/avgViews, ER = (реакции + 3*репосты + 2*комменты)/просмотры."""
         rows = await self._q(f"""
             WITH base AS (
-              SELECT id, source_id, status, source_date, views,
+              SELECT id, source_id, status, source_date, scheduled_at, views,
                      (reactions + 3*forwards + 2*replies)::float / GREATEST(views,1) AS er
               FROM posts WHERE kind='parsed'
                 AND source_date >= now() - make_interval(days => %s)
             ), norm AS (
-              SELECT id, status, source_date,
+              SELECT id, status, source_date, scheduled_at,
                      COALESCE(0.6 * er / NULLIF(avg(er) OVER w, 0), 0.6)
                    + COALESCE(0.4 * views / NULLIF(avg(views) OVER w, 0), 0.4) AS score
               FROM base WINDOW w AS (PARTITION BY source_id)
             ), best AS (
               SELECT id, score FROM norm
-              WHERE status='candidate'
+              WHERE status='candidate' AND scheduled_at IS NULL
                 AND source_date <= now() - make_interval(mins => %s)
                 AND source_date >= now() - make_interval(hours => %s)
                 AND score >= %s
@@ -340,7 +342,7 @@ class DB:
             UPDATE posts p SET status='processing', claimed_at=now(), attempts=attempts+1,
                                score=best.score, updated_at=now()
             FROM best, automation_sources s
-            WHERE p.id=best.id AND p.status='candidate' AND s.id=p.source_id
+            WHERE p.id=best.id AND p.status='candidate' AND p.scheduled_at IS NULL AND s.id=p.source_id
             RETURNING {RET}, best.score AS _score""",
             (baseline_days, min_age_min, max_age_h, min_score))
         if not rows:
@@ -447,9 +449,27 @@ class DB:
             UPDATE posts p SET status='processing', claimed_at=now(), attempts=attempts+1, updated_at=now()
             FROM automation_sources s
             WHERE s.id = p.source_id AND p.id = (
-                SELECT id FROM posts WHERE status='pending' AND cardinality(dest_msg_ids)=0
+                SELECT id FROM posts WHERE status='pending' AND scheduled_at IS NULL AND cardinality(dest_msg_ids)=0
                   AND (next_attempt_at IS NULL OR next_attempt_at <= now())
                 ORDER BY next_attempt_at NULLS FIRST, id FOR UPDATE SKIP LOCKED LIMIT 1)
+            RETURNING {RET}""")
+        return Post(**rows[0]) if rows else None
+
+    async def set_post_schedule(self, pid, scheduled_at):
+        rows = await self._q("""UPDATE posts SET scheduled_at=%s, status='candidate',
+            next_attempt_at=NULL, attempts=0, last_error=NULL, updated_at=now()
+            WHERE id=%s AND status IN ('candidate','pending','failed','expired')
+            AND cardinality(dest_msg_ids)=0 AND send_started_at IS NULL RETURNING id""", (scheduled_at, pid))
+        return bool(rows)
+
+    async def claim_scheduled(self):
+        rows = await self._q(f"""UPDATE posts p SET status='processing', claimed_at=now(),
+            attempts=attempts+1, updated_at=now() FROM automation_sources s
+            WHERE s.id=p.source_id AND p.id=(SELECT id FROM posts
+                WHERE scheduled_at <= now() AND status IN ('candidate','pending')
+                AND cardinality(dest_msg_ids)=0 AND send_started_at IS NULL
+                AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+                ORDER BY scheduled_at, id FOR UPDATE SKIP LOCKED LIMIT 1)
             RETURNING {RET}""")
         return Post(**rows[0]) if rows else None
 
@@ -496,7 +516,7 @@ class DB:
 
     async def expire_old(self, hours: int) -> int:
         rows = await self._q("UPDATE posts SET status='expired', updated_at=now() "
-                             "WHERE status IN ('candidate','pending') AND kind='parsed' "
+                             "WHERE status IN ('candidate','pending') AND scheduled_at IS NULL AND kind='parsed' "
                              "AND source_date < now() - make_interval(hours => %s) RETURNING id", (hours,))
         return len(rows)
 

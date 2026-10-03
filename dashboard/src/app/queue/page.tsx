@@ -105,59 +105,19 @@ export default async function QueuePage({ searchParams }: { searchParams: SP }) 
       {items.length === 0 && !error ? (
         <Empty>ничего не найдено по текущим фильтрам</Empty>
       ) : (
-        <div className="table-wrap">
-          <table className="w-full">
-            <thead>
-              <tr>
-                <Th>ID</Th>
-                <Th>Превью</Th>
-                <Th>Статус</Th>
-                <Th>Тип</Th>
-                <Th>Источник</Th>
-                <Th>Дата</Th>
-                <Th>Текст</Th>
-                <Th>Просмотры / реакции / репосты / ответы</Th>
-                <Th>Текст AI</Th>
-                <Th>Попытки</Th>
-                <Th>Действия</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((p) => (
-                <tr key={p.id}>
-                  <Td>
-                    <Link href={`/queue/${p.id}`} className="text-sky-400 hover:underline">
-                      {p.id}
-                    </Link>
-                  </Td>
-                  <Td><MediaPreview postId={p.id} compact /></Td>
-                  <Td>
-                    <Badge v={p.status} />
-                    {p.dest_msg_ids?.length > 0 && (
-                      <div className="mt-1 text-xs text-emerald-300">Сообщения: {p.dest_msg_ids.join(", ")}</div>
-                    )}
-                  </Td>
-                  <Td>
-                    <Badge v={p.kind} />
-                  </Td>
-                  <Td className="font-mono text-xs">{p.source_ref}</Td>
-                  <Td className="whitespace-nowrap text-xs text-zinc-500">{fmtDate(p.source_date)}</Td>
-                  <Td className="max-w-[280px] text-xs text-zinc-400">{excerpt(p.text)}</Td>
-                  <Td className="whitespace-nowrap text-xs text-zinc-400">
-                    {p.views ?? 0} / {p.reactions ?? 0} / {p.forwards ?? 0} / {p.replies ?? 0}
-                  </Td>
-                  <Td>
-                    <Badge v={p.ai_status} />
-                    {p.ai_caption && <div className="mt-0.5 text-xs text-zinc-500">{excerpt(p.ai_caption, 60)}</div>}
-                  </Td>
-                  <Td>{p.attempts ?? 0}</Td>
-                  <Td>
-                    <PostRowActions p={p} />
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 2xl:grid-cols-3">
+          {items.map((p) => <article key={p.id} className="surface overflow-hidden">
+            <MediaPreview postId={p.id} compact />
+            <div className="space-y-4 p-5">
+              <div className="flex flex-wrap items-center gap-2"><Link href={`/queue/${p.id}`} className="font-semibold text-sky-300">Пост №{p.id}</Link><Badge v={p.status}/><Badge v={p.kind}/></div>
+              <div className="flex flex-wrap justify-between gap-2 text-xs text-slate-400"><span>{p.source_ref}</span><span>{fmtDate(p.source_date)}</span></div>
+              <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-200">{excerpt(p.text,280) || "Публикация без текста"}</p>
+              <div className="flex flex-wrap gap-4 text-xs text-slate-400"><span>👁 {p.views ?? 0}</span><span>❤ {p.reactions ?? 0}</span><span>↗ {p.forwards ?? 0}</span><span>💬 {p.replies ?? 0}</span></div>
+              <div className="rounded-xl bg-slate-950/40 p-3"><Badge v={p.ai_status}/>{p.ai_caption&&<p className="mt-2 text-xs leading-5 text-slate-400">{excerpt(p.ai_caption,160)}</p>}</div>
+              {p.last_error&&<p className="break-words text-xs text-red-300">{excerpt(p.last_error,180)}</p>}
+              <PostRowActions p={p}/>
+            </div>
+          </article>)}
         </div>
       )}
 

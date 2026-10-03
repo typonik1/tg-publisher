@@ -1,6 +1,7 @@
 "use client";
 
 import ActionButton from "@/components/ActionButton";
+import PostSchedule from "@/components/PostSchedule";
 
 const SENDABLE = ["candidate", "pending", "failed", "expired"];
 
@@ -37,6 +38,7 @@ export default function PostRowActions({ p }: { p: any }) {
       {canAi && (
         <ActionButton path={`posts/${p.id}/ai`} body={{ force: true }} label="Создать текст AI" doneLabel="текст AI готов" />
       )}
+      {canPublish && <PostSchedule p={p} />}
     </div>
   );
 }

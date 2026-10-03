@@ -12,6 +12,7 @@ const ALLOWED: { method: string; re: RegExp }[] = [
   { method: "DELETE", re: /^sources\/\d+$/ },
   { method: "POST", re: /^sources\/\d+\/(check|backfill)$/ },
   { method: "GET", re: /^posts$/ },
+  { method: "PUT", re: /^posts\/\d+\/schedule$/ },
   { method: "GET", re: /^posts\/\d+$/ },
   { method: "GET", re: /^posts\/\d+\/preview$/ },
   { method: "POST", re: /^posts\/\d+\/(publish|requeue|skip|ai)$/ },

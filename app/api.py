@@ -9,7 +9,7 @@ import hmac
 import json
 import logging
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
 
@@ -354,6 +354,35 @@ async def h_post_skip(request: web.Request) -> web.Response:
 
 
 @handler
+async def h_post_schedule(request: web.Request) -> web.Response:
+    ctx = request.app['ctx']
+    pid = _path_id(request)
+    if pid <= 0:
+        raise ValueError('invalid post id')
+    body = await body_json(request)
+    if set(body) != {'scheduled_at'}:
+        raise ValueError('Укажите scheduled_at или null для отмены')
+    at = body['scheduled_at']
+    if at is not None:
+        if not isinstance(at, str):
+            raise ValueError('Ожидается дата и время с часовым поясом')
+        try:
+            at = datetime.fromisoformat(at.replace('Z', '+00:00'))
+        except ValueError as exc:
+            raise ValueError('Неверная дата публикации') from exc
+        if at.tzinfo is None or at <= datetime.now(timezone.utc):
+            raise ValueError('Выберите будущее время с часовым поясом')
+    if not await ctx.db.get_post(pid):
+        raise LookupError('Публикация не найдена')
+    if not await ctx.db.set_post_schedule(pid, at):
+        return jr({'error': 'Пост уже отправлен, обрабатывается или требует проверки'}, status=409)
+    await events.log_event(ctx.db, events.SETTINGS_UPDATED, post_id=pid,
+                           message='Время публикации изменено' if at else 'Личное время отменено',
+                           metadata={'scheduled_at': at.isoformat() if at else None})
+    return jr({'ok': True, 'scheduled_at': at})
+
+
+@handler
 async def h_post_ai(request: web.Request) -> web.Response:
     body = await body_json(request)
     return await _post_action(request, "generate_ai", {"force": bool(body.get("force"))})
@@ -584,6 +613,7 @@ def build_app(ctx: ApiContext, token: str) -> web.Application:
     r.add_post("/api/posts/{id}/requeue", h_post_requeue)
     r.add_post("/api/posts/{id}/skip", h_post_skip)
     r.add_post("/api/posts/{id}/ai", h_post_ai)
+    r.add_put("/api/posts/{id}/schedule", h_post_schedule)
     r.add_get("/api/schedule", h_schedule_get)
     r.add_put("/api/schedule", h_schedule_put)
     r.add_get("/api/settings", h_settings_get)

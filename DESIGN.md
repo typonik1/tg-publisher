@@ -80,3 +80,8 @@
 
 ## Open questions
 - [ ] Нужна ли отдельная светлая тема после проверки обновлённой тёмной версии / владелец / низкое влияние.
+
+## Queue update (2026-10-03)
+- Default queue is responsive content cards, no tiny table thumbnails.
+- Media uses object-contain, height 256–320px; native modal opens 96vw × 94dvh and closes with Escape or Close.
+- Every sendable card and detail has individual date/time control (Europe/Moscow), reschedule/cancel and visible scheduled timestamp. Scheduling does not publish immediately.

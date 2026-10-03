@@ -182,6 +182,15 @@ class Worker:
         log.info("own channel scan done: %d posts", n)
 
     # ================= расписание =================
+    async def scheduled_tick(self):
+        rt = await self.rt.view()
+        if rt.publishing_paused:
+            return
+        post = await self.db.claim_scheduled()
+        if post:
+            log.info('personal schedule due post=%s', post.id)
+            await self._run(post)
+
     async def publish_tick(self):
         rt = await self.rt.view()
         if rt.publishing_paused:
@@ -508,10 +517,11 @@ class Worker:
         await self.db.fail_stale_actions(0, "interrupted by worker restart")
         await events.log_event(self.db, events.WORKER_STARTED, message=f"v{__version__}")
         pub_every = 30 if self.cfg.publish_times else self.cfg.publish_interval
-        limits = {"collect": self.cfg.collect_interval, "publish": pub_every, "actions": 5}
+        limits = {"collect": self.cfg.collect_interval, "publish": pub_every, "actions": 5, "scheduled": 5}
         await asyncio.gather(self.loop("collect", self._collect_interval, self.collect_once),
                              self.loop("publish", pub_every, self.publish_tick),
                              self.loop("actions", 5, self.actions_tick),
+                             self.loop("scheduled", 5, self.scheduled_tick),
                              self.watchdog(limits))
 
 
