@@ -1,4 +1,5 @@
 import json
+import tempfile
 import unittest
 
 from aiohttp.test_utils import TestClient, TestServer
@@ -18,13 +19,15 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.db.posts = [make_post(1, "candidate"), make_post(2, "failed"),
                          make_post(3, "published", dest=[9])]
-        self.cfg = make_cfg(proxy=PROXY)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.cfg = make_cfg(proxy=PROXY, ai_api_key_file=self._tmp.name + "/ai_api_key")
         self.w = FakeWorker(self.db, self.cfg)
         self.client = TestClient(TestServer(build_app(ApiContext(self.w), "tok")))
         await self.client.start_server()
 
     async def asyncTearDown(self):
         await self.client.close()
+        self._tmp.cleanup()
 
     def _h(self, **kw):
         return {"Authorization": "Bearer tok", **kw}
@@ -100,12 +103,19 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data["api_key"]["configured"])
         self.assertTrue(data["api_key"]["mask"].endswith("3456"))
 
-    async def test_ai_key_not_settable_via_panel(self):
-        r = await self.client.put("/api/ai", json={"api_key": "new"}, headers=self._h())
-        self.assertEqual(r.status, 400)
+    async def test_ai_key_settable_without_leaking(self):
+        r = await self.client.put("/api/ai", json={"api_key": "sk-new-secret-9876"}, headers=self._h())
+        self.assertEqual(r.status, 200)
+        body = await r.text()
+        self.assertNotIn("sk-new-secret-9876", body)
+        self.assertTrue((await r.json())["api_key"]["mask"].endswith("9876"))
+        self.assertEqual(self.w.rt.effective_ai_key(), "sk-new-secret-9876")
         r = await self.client.put("/api/ai", json={"ai_model": "new-model"}, headers=self._h())
         self.assertEqual(r.status, 200)
         self.assertEqual(await self.w.rt.get("ai_model"), "new-model")
+        r = await self.client.put("/api/ai", json={"clear_api_key": True}, headers=self._h())
+        self.assertEqual(r.status, 200)
+        self.assertEqual(self.w.rt.effective_ai_key(), self.cfg.ai_api_key)
 
     # ---------- schedule ----------
     async def test_schedule_roundtrip(self):
