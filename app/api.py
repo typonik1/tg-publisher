@@ -20,7 +20,7 @@ from . import __version__, events
 from .actions import BACKFILL_SIZES
 from .db import POST_STATUSES
 from .logic import next_slot, render_footer
-from .settings import footer_for_api
+from .settings import footer_for_api, validate
 
 log = logging.getLogger("api")
 
@@ -291,6 +291,25 @@ async def h_source_backfill(request: web.Request) -> web.Response:
 
 
 @handler
+async def h_post_preview(request: web.Request) -> web.Response:
+    ctx = request.app['ctx']
+    pid = _path_id(request)
+    if pid <= 0:
+        raise ValueError('invalid post id')
+    row = await ctx.db.get_post(pid)
+    if row is None:
+        raise LookupError('post not found')
+    try:
+        image = await ctx.worker.previews.get(pid, source_ref=row['source_ref'], source_msg_ids=row['source_msg_ids'])
+    except Exception as exc:
+        log.warning('preview unavailable post=%s: %s', pid, type(exc).__name__)
+        return jr({'error': 'Превью временно недоступно'}, status=503)
+    if image is None:
+        return web.Response(status=204, headers={'Cache-Control': 'no-store'})
+    return web.FileResponse(image, headers={'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=300'})
+
+
+@handler
 async def h_posts(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     limit, offset = parse_paging(request.query)
@@ -387,11 +406,18 @@ async def h_settings_put(request: web.Request) -> web.Response:
 async def h_ai_get(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     v = await ctx.settings.api_view()
-    runtime = await ctx.settings.view()
+    primary = await ctx.settings.view(profile=1)
+    secondary = await ctx.settings.view(profile=2)
     data = {k: v[k] for k in ("ai_enabled", "ai_required", "ai_base_url", "ai_model", "ai_prompt", "ai_timeout")}
-    data["api_key"] = mask_key(runtime.ai_api_key)
-    data["api_key_configured"] = bool(runtime.ai_api_key)
+    data["ai_secondary_base_url"] = v["ai_secondary_base_url"]
+    data["ai_secondary_model"] = v["ai_secondary_model"]
+    data["ai_active_profile"] = v["ai_active_profile"]
+    data["api_key"] = mask_key(primary.ai_api_key)
+    data["api_key_configured"] = bool(primary.ai_api_key)
     data["api_key_env_only"] = False
+    data["secondary_api_key"] = mask_key(secondary.ai_api_key)
+    data["secondary_api_key_configured"] = bool(secondary.ai_api_key)
+    data["secondary_api_key_env_only"] = False
     return jr(data)
 
 
@@ -399,32 +425,56 @@ async def h_ai_get(request: web.Request) -> web.Response:
 async def h_ai_put(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     body = await body_json(request)
-    clear_api_key = body.pop("clear_api_key", False)
-    if not isinstance(clear_api_key, bool):
-        raise ValueError("clear_api_key: ожидается true/false")
+    def take_key(public_name: str, clear_name: str, settings_name: str) -> tuple[str, bool]:
+        clear = body.pop(clear_name, False)
+        if not isinstance(clear, bool):
+            raise ValueError(f"{clear_name}: ожидается true/false")
+        supplied = body.pop(public_name, None)
+        if supplied is not None and not isinstance(supplied, str):
+            raise ValueError(f"{public_name}: ожидается строка до 4096 символов")
+        supplied = supplied.strip() if isinstance(supplied, str) else ""
+        if clear and supplied:
+            raise ValueError("нельзя одновременно задать и удалить API-ключ")
+        if clear:
+            body[settings_name] = ""
+        elif supplied:
+            body[settings_name] = supplied
+        return supplied, clear
 
-    api_key = body.pop("api_key", None)
-    if api_key is not None and not isinstance(api_key, str):
-        raise ValueError("api_key: ожидается строка до 4096 символов")
-    api_key = api_key.strip() if isinstance(api_key, str) else ""
-    if clear_api_key and api_key:
-        raise ValueError("нельзя одновременно задать и удалить API-ключ")
-    if "ai_base_url" in body and not api_key and not clear_api_key:
-        current = await ctx.settings.view()
-        def origin(url):
-            parsed = urlsplit(url)
-            return (parsed.scheme.lower(), parsed.hostname,
-                    parsed.port or (443 if parsed.scheme == "https" else 80))
-        if current.ai_api_key and origin(str(body["ai_base_url"])) != origin(current.ai_base_url):
+    api_key, clear_api_key = take_key("api_key", "clear_api_key", "ai_api_key")
+    secondary_key, clear_secondary_key = take_key(
+        "secondary_api_key", "clear_secondary_api_key", "ai_secondary_api_key")
+    cleaned = validate("ai", body) if body else {}
+
+    def origin(url):
+        parsed = urlsplit(url)
+        return (parsed.scheme.lower(), parsed.hostname,
+                parsed.port or (443 if parsed.scheme == "https" else 80))
+
+    primary = await ctx.settings.view(profile=1)
+    secondary = await ctx.settings.view(profile=2)
+    if "ai_base_url" in cleaned and not api_key and not clear_api_key:
+        if primary.ai_api_key and origin(cleaned["ai_base_url"]) != origin(primary.ai_base_url):
             raise ValueError("Для смены сервиса нейросети введите новый API-ключ или удалите текущий")
-    if clear_api_key:
-        body["ai_api_key"] = ""
-    elif api_key:
-        body["ai_api_key"] = api_key
+    if "ai_secondary_base_url" in cleaned and not secondary_key and not clear_secondary_key:
+        if (secondary.ai_api_key and
+                origin(cleaned["ai_secondary_base_url"]) != origin(secondary.ai_base_url)):
+            raise ValueError("Для смены резервного сервиса введите новый API-ключ или удалите текущий")
 
-    if body:
-        cleaned = await ctx.settings.update("ai", body)
-        public_keys = ["api_key" if key == "ai_api_key" else key for key in sorted(cleaned)]
+    resulting_active = cleaned.get("ai_active_profile", primary.ai_active_profile)
+    if resulting_active == 2:
+        second_url = cleaned.get("ai_secondary_base_url", secondary.ai_base_url)
+        second_model = cleaned.get("ai_secondary_model", secondary.ai_model)
+        second_key = cleaned.get("ai_secondary_api_key", secondary.ai_api_key)
+        if not (second_url and second_model and second_key):
+            raise ValueError("Профиль 2 нужно полностью настроить: Base URL, модель и API-ключ")
+
+    if cleaned:
+        cleaned = await ctx.settings.update("ai", cleaned)
+        public_keys = []
+        for key in sorted(cleaned):
+            public_keys.append({"ai_api_key": "api_key",
+                                "ai_secondary_api_key": "secondary_api_key"}.get(key, key))
         await events.log_event(ctx.db, events.SETTINGS_UPDATED, message="ai",
                                metadata={"keys": public_keys})
     return await h_ai_get(request)
@@ -434,7 +484,28 @@ async def h_ai_put(request: web.Request) -> web.Response:
 async def h_ai_test(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     body = await body_json(request)
-    aid = await ctx.db.create_action("test_ai_provider", {"text": str(body.get("text") or "")[:500]})
+    unknown = set(body) - {"profile", "text", "post_id"}
+    if unknown:
+        raise ValueError(f"неизвестный ключ {sorted(unknown)[0]!r}")
+    profile = body.get("profile")
+    if profile is None:
+        profile = (await ctx.settings.view()).ai_active_profile
+    if isinstance(profile, bool) or not isinstance(profile, int) or profile not in (1, 2):
+        raise ValueError("profile: ожидается 1 или 2")
+    text = body.get("text", "")
+    if not isinstance(text, str):
+        raise ValueError("text: ожидается строка")
+    text = text.strip()[:500]
+    post_id = body.get("post_id")
+    if post_id is not None and (isinstance(post_id, bool) or not isinstance(post_id, int) or post_id < 1):
+        raise ValueError("post_id: ожидается положительное целое")
+    runtime = await ctx.settings.view(profile=profile)
+    if not (runtime.ai_base_url and runtime.ai_model and runtime.ai_api_key):
+        raise ValueError(f"Профиль {profile} не настроен")
+    payload = {"profile": profile, "text": text}
+    if post_id is not None:
+        payload["post_id"] = post_id
+    aid = await ctx.db.create_action("test_ai_provider", payload, post_id=post_id)
     return jr({"action_id": aid, "status": "pending"}, status=202)
 
 
@@ -508,6 +579,7 @@ def build_app(ctx: ApiContext, token: str) -> web.Application:
     r.add_post("/api/sources/{id}/backfill", h_source_backfill)
     r.add_get("/api/posts", h_posts)
     r.add_get("/api/posts/{id}", h_post)
+    r.add_get("/api/posts/{id}/preview", h_post_preview)
     r.add_post("/api/posts/{id}/publish", h_post_publish)
     r.add_post("/api/posts/{id}/requeue", h_post_requeue)
     r.add_post("/api/posts/{id}/skip", h_post_skip)

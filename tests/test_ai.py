@@ -118,6 +118,10 @@ class AITests(unittest.IsolatedAsyncioTestCase):
         with patch.object(ai.httpx, 'AsyncClient', FakeAsyncClient):
             self.assertEqual(await ai.generate_caption(make_cfg(), 'original'), text)
 
+    def test_missing_image_service_reply_is_not_caption(self):
+        self.assertTrue(ai.is_refusal('Я не вижу саму картинку, так как в сообщении указан только текст.'))
+        self.assertTrue(ai.is_refusal("I can't see the image you mentioned."))
+
     async def test_429_without_retry_after_uses_bounded_defaults(self):
         cases = [
             ("temporary rate limit", 60),

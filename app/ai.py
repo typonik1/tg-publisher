@@ -37,7 +37,10 @@ _REFUSAL = re.compile(
 
 
 def is_refusal(text: str | None) -> bool:
-    return bool(_REFUSAL.match((text or '').lstrip(' \n\r\t\"\'«*')))
+    value = (text or '').lstrip(' \n\r\t\"\'«*')
+    return bool(_REFUSAL.match(value) or re.match(
+        r'^(?:я\s+не\s+(?:вижу|получил)|(?:i\s+)?(?:cannot|can[\'’]t)\s+(?:see|view))\b',
+        value, re.IGNORECASE))
 
 
 def validate_caption(text: str | None) -> str:

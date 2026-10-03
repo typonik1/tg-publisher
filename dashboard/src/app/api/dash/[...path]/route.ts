@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { pubFetch } from "@/lib/api";
+import { pubFetch, pubResponse } from "@/lib/api";
 
 type Ctx = { params: { path: string[] } };
 
@@ -13,6 +13,7 @@ const ALLOWED: { method: string; re: RegExp }[] = [
   { method: "POST", re: /^sources\/\d+\/(check|backfill)$/ },
   { method: "GET", re: /^posts$/ },
   { method: "GET", re: /^posts\/\d+$/ },
+  { method: "GET", re: /^posts\/\d+\/preview$/ },
   { method: "POST", re: /^posts\/\d+\/(publish|requeue|skip|ai)$/ },
   { method: "GET", re: /^schedule$/ },
   { method: "PUT", re: /^schedule$/ },
@@ -36,6 +37,22 @@ async function handle(req: NextRequest, ctx: Ctx) {
     return NextResponse.json({ error: "not allowed" }, { status: 404 });
   }
   try {
+    if (method === "GET" && /^posts\/\d+\/preview$/.test(sub)) {
+      const upstream = await pubResponse(`/api/${sub}`);
+      if (upstream.status === 204) return new NextResponse(null, { status: 204 });
+      if (!upstream.ok) {
+        const data = await upstream.json().catch(() => ({}));
+        return NextResponse.json({ error: data?.error ?? `preview ${upstream.status}` }, { status: upstream.status });
+      }
+      const contentType = upstream.headers.get("content-type") ?? "";
+      if (!contentType.startsWith("image/")) {
+        return NextResponse.json({ error: "invalid preview content" }, { status: 502 });
+      }
+      return new NextResponse(upstream.body, {
+        status: 200,
+        headers: { "Content-Type": contentType, "Cache-Control": "private, max-age=300" },
+      });
+    }
     const init: RequestInit & { json?: unknown } = { method };
     if (!["GET", "HEAD"].includes(method)) {
       try {

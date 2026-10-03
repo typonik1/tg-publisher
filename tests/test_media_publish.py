@@ -63,8 +63,14 @@ class PublishClient:
         return self.msgs
 
     async def download_media(self, msg, file):
-        path = Path(file) / f"{msg.id}.{'jpg' if msg.photo else 'mp4'}"
-        path.write_bytes(b"offline-media-fixture")
+        path = Path(file)
+        if not path.suffix:
+            path = path / f"{msg.id}.{'jpg' if msg.photo else 'mp4'}"
+        if msg.photo:
+            from PIL import Image
+            Image.new('RGB', (16, 16), 'red').save(path, format='JPEG')
+        else:
+            path.write_bytes(b"offline-media-fixture")
         return str(path)
 
     async def upload_file(self, path):

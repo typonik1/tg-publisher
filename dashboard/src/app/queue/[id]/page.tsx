@@ -3,6 +3,7 @@ import { pubFetch } from "@/lib/api";
 import { Badge, Card, ErrorBox, PageHeader, Td, Th, humanLabel } from "@/components/ui";
 import PostRowActions from "@/components/PostRowActions";
 import { fmtDate } from "@/lib/format";
+import MediaPreview from "@/components/MediaPreview";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +41,10 @@ export default async function PostDetailPage({ params }: { params: { id: string 
       </div>
 
       <PageHeader eyebrow="Очередь публикаций" title={`Публикация №${p.id}`} description={<span className="flex flex-wrap gap-2"><Badge v={p.status} /><Badge v={p.kind} /><Badge v={p.ai_status} /></span>} />
+
+      <Card title="Изображение" description="Превью исходного медиафайла. Оно загружается только при открытии страницы.">
+        <div className="max-w-3xl"><MediaPreview postId={p.id} /></div>
+      </Card>
 
       <Card title="Сведения о публикации">
         <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm md:grid-cols-3">

@@ -1,5 +1,5 @@
 import { pubFetch } from "@/lib/api";
-import { ErrorBox } from "@/components/ui";
+import { ErrorBox, PageHeader } from "@/components/ui";
 import AiForm from "@/components/AiForm";
 
 export const dynamic = "force-dynamic";
@@ -13,13 +13,8 @@ export default async function AiPage() {
     error = e?.message ?? "нет связи с Control API";
   }
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">Нейросеть</h1>
-        <p className="mt-1 text-sm text-zinc-400">
-          Подключите AI-сервис, выберите модель и настройте, как бот будет переписывать подписи.
-        </p>
-      </div>
+    <div>
+      <PageHeader eyebrow="Автоматизация" title="Нейросеть" description="Настройте два независимых AI-сервиса, вручную выберите активный и проверьте каждый до публикации." />
       {error ? <ErrorBox message={error} /> : <AiForm initial={data} />}
     </div>
   );

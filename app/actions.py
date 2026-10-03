@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import time
 
 from . import events
 from .ai import generate_caption
@@ -133,7 +134,7 @@ async def h_generate_ai(w, payload):
     ent = await resolve(w.client, post.source_ref)
     msgs = [m for m in await w.client.get_messages(ent, ids=post.source_msg_ids) if m]
     with tempfile.TemporaryDirectory() as tmp:
-        image = await w._preview_image(msgs, [], tmp)
+        image = await w._preview_image(msgs, [], tmp, post.id)
         await w._ai(post, image, rt)
     cur = await w.db.get_post(pid)
     return {"ai_status": cur["ai_status"], "ai_caption": cur["ai_caption"], "post_id": pid}
@@ -147,12 +148,25 @@ async def h_scan_own(w, payload):
 
 
 async def h_test_ai_provider(w, payload):
-    rt = await w.rt.view()
-    if not rt.ai_enabled:
-        raise ValueError("Нейросеть выключена: включите её и задайте API-ключ в разделе Нейросеть")
+    profile = payload.get('profile')
+    rt = await w.rt.view(profile=profile)
+    profile = profile or rt.ai_active_profile
+    if not rt.ai_base_url or not rt.ai_model or not rt.ai_api_key:
+        raise ValueError('Заполните адрес API, модель и ключ выбранного профиля')
     text = str(payload.get("text") or "Тест AI из панели управления").strip()[:500]
-    cap = await generate_caption(rt, text, None)
-    return {"ok": True, "model": rt.ai_model, "reply": cap[:300]}
+    image = None
+    if payload.get('post_id'):
+        pid = _pid(payload)
+        post = await w.db.load_post(pid)
+        if post is None:
+            raise ValueError('Публикация не найдена')
+        image = await w.previews.get(pid, source_ref=post.source_ref, source_msg_ids=post.source_msg_ids)
+        if image is None:
+            raise ValueError('У публикации нет доступного изображения для проверки vision')
+    started = time.monotonic()
+    cap = await generate_caption(rt, text, image)
+    return {"ok": True, "profile": profile, "model": rt.ai_model, "reply": cap[:1000],
+            "image_attached": bool(image), "elapsed_ms": round((time.monotonic()-started)*1000)}
 
 
 async def h_repost_own(w, payload):

@@ -27,6 +27,7 @@ from .logic import (AI_FAILED, AI_GENERATED, AI_NO_PREVIEW, AI_PROCESSING, AI_UN
 from .logic import parse_ref
 from .settings import RuntimeSettings
 from .media import album_kind, media_batches, prepare_media
+from .preview import PreviewCache
 from .tg import ensure_connected, resolve
 
 log = logging.getLogger("worker")
@@ -69,6 +70,7 @@ class Worker:
         self.heartbeat: dict[str, float] = {}
         self.dest = None
         self.own_sid = None
+        self.previews = PreviewCache(client, Path(cfg.session_path).parent / 'previews')
 
     async def _dest(self):
         if self.dest is None:
@@ -290,18 +292,9 @@ class Worker:
                 raise
             return None
 
-    async def _preview_image(self, msgs, files, tmp):
-        """Картинка для AI: фото из поста, иначе превью видео."""
-        for p in files:
-            if p.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-                return p
-        for m in msgs:
-            if m.document and getattr(m.document, "thumbs", None):
-                try:
-                    return await self.client.download_media(m, file=f"{tmp}/thumb_{m.id}.jpg", thumb=-1)
-                except Exception as e:
-                    log.warning("thumb download failed msg=%s: %s", m.id, e)
-        return None
+    async def _preview_image(self, msgs, files, tmp, post_id=None):
+        cache = self.previews if post_id is not None else PreviewCache(self.client, tmp)
+        return await cache.get(post_id if post_id is not None else 'temporary', msgs=msgs, downloaded_files=files)
 
     async def _valid_custom_emojis(self, entities):
         ids = list({e.document_id for e in entities if isinstance(e, MessageEntityCustomEmoji)})
@@ -352,7 +345,7 @@ class Worker:
             if not files and not source_body.strip():
                 await self.db.mark(post.id, SKIPPED, "nothing to publish")
                 return
-            image = await self._preview_image(msgs, files, tmp) if post.kind == PARSED and rt.ai_enabled else None
+            image = await self._preview_image(msgs, files, tmp, post.id) if post.kind == PARSED and rt.ai_enabled else None
             try:
                 ai_text = await self._ai(replace(post, text=source_body), image, rt, entity, source_entities)
             except (AIError, asyncio.TimeoutError) as e:

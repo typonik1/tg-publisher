@@ -3,6 +3,7 @@ import { pubFetch } from "@/lib/api";
 import { Badge, Empty, ErrorBox, INPUT, PageHeader, Td, Th, humanLabel } from "@/components/ui";
 import PostRowActions from "@/components/PostRowActions";
 import { excerpt, fmtDate } from "@/lib/format";
+import MediaPreview from "@/components/MediaPreview";
 
 export const dynamic = "force-dynamic";
 
@@ -109,6 +110,7 @@ export default async function QueuePage({ searchParams }: { searchParams: SP }) 
             <thead>
               <tr>
                 <Th>ID</Th>
+                <Th>Превью</Th>
                 <Th>Статус</Th>
                 <Th>Тип</Th>
                 <Th>Источник</Th>
@@ -128,6 +130,7 @@ export default async function QueuePage({ searchParams }: { searchParams: SP }) 
                       {p.id}
                     </Link>
                   </Td>
+                  <Td><MediaPreview postId={p.id} compact /></Td>
                   <Td>
                     <Badge v={p.status} />
                     {p.dest_msg_ids?.length > 0 && (

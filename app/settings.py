@@ -74,6 +74,24 @@ def _v_url(raw):
     return s.rstrip("/")
 
 
+def _v_optional_str(maxlen: int):
+    def v(raw):
+        if not isinstance(raw, str):
+            raise ValueError(f"ожидается строка до {maxlen} символов")
+        s = raw.strip()
+        if len(s) > maxlen:
+            raise ValueError(f"ожидается строка до {maxlen} символов")
+        return s
+    return v
+
+
+def _v_optional_url(raw):
+    s = _v_optional_str(200)(raw)
+    if s and not s.startswith(("http://", "https://")):
+        raise ValueError("ожидается http(s) URL")
+    return s.rstrip("/")
+
+
 def _v_tz(raw):
     s = _v_str(64)(raw)
     try:
@@ -156,6 +174,10 @@ VALIDATORS = {
     "ai_api_key": _v_api_key,
     "ai_base_url": _v_url,
     "ai_model": _v_str(200),
+    "ai_secondary_api_key": _v_api_key,
+    "ai_secondary_base_url": _v_optional_url,
+    "ai_secondary_model": _v_optional_str(200),
+    "ai_active_profile": _v_int(1, 2),
     "ai_prompt": _v_str(4000),
     "ai_timeout": _v_int(5, 300),
     "footer": _v_footer,
@@ -165,7 +187,9 @@ SECTIONS = {
     "schedule": ["tz_name", "publish_times", "schedule_pattern", "candidate_min_age_min",
                  "max_post_age_hours", "best_min_score", "baseline_days", "own_min_age_days",
                  "repost_cooldown_days", "collect_interval", "publishing_paused"],
-    "ai": ["ai_enabled", "ai_required", "ai_api_key", "ai_base_url", "ai_model", "ai_prompt", "ai_timeout"],
+    "ai": ["ai_enabled", "ai_required", "ai_api_key", "ai_base_url", "ai_model",
+           "ai_secondary_api_key", "ai_secondary_base_url", "ai_secondary_model",
+           "ai_active_profile", "ai_prompt", "ai_timeout"],
     "footer": ["footer"],
 }
 
@@ -202,6 +226,10 @@ class RuntimeSettings:
     def default(self, key: str):
         if key == "publishing_paused":
             return False
+        if key in {"ai_secondary_api_key", "ai_secondary_base_url", "ai_secondary_model"}:
+            return ""
+        if key == "ai_active_profile":
+            return 1
         return getattr(self.cfg, key)
 
     async def _overrides(self) -> dict:
@@ -226,10 +254,17 @@ class RuntimeSettings:
             v = [dtime.fromisoformat(x) for x in v]
         return v
 
-    async def view(self) -> SimpleNamespace:
-        """Снимок для воркера: публичные настройки и runtime/ENV AI-ключ."""
+    async def view(self, profile: int | None = None) -> SimpleNamespace:
+        """Снимок воркера; стандартные AI-поля указывают на выбранный профиль."""
         ov = await self._overrides()
         d = {k: self._resolved(k, ov) for k in VALIDATORS}
+        selected = d["ai_active_profile"] if profile is None else profile
+        if isinstance(selected, bool) or selected not in (1, 2):
+            raise SettingsError("profile: ожидается 1 или 2")
+        if selected == 2:
+            d["ai_base_url"] = d["ai_secondary_base_url"]
+            d["ai_model"] = d["ai_secondary_model"]
+            d["ai_api_key"] = d["ai_secondary_api_key"]
         return SimpleNamespace(**d)
 
     async def get(self, key: str):
@@ -241,7 +276,7 @@ class RuntimeSettings:
         ov = await self._overrides()
         out = {}
         for k in VALIDATORS:
-            if k == "ai_api_key":
+            if k in {"ai_api_key", "ai_secondary_api_key"}:
                 continue
             v = self._resolved(k, ov)
             if k == "publish_times":
