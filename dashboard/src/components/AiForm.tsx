@@ -12,6 +12,8 @@ export default function AiForm({ initial }: { initial: any }) {
   const [model, setModel] = useState(initial?.ai_model ?? "");
   const [prompt, setPrompt] = useState(initial?.ai_prompt ?? "");
   const [timeout_, setTimeout_] = useState(initial?.ai_timeout ?? 40);
+  const [apiKey, setApiKey] = useState("");
+  const [clearKey, setClearKey] = useState(false);
   const [testText, setTestText] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -36,10 +38,14 @@ export default function AiForm({ initial }: { initial: any }) {
           ai_model: model,
           ai_prompt: prompt,
           ai_timeout: Number(timeout_),
+          ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+          ...(clearKey ? { clear_api_key: true } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || `ошибка ${res.status}`);
+      setApiKey("");
+      setClearKey(false);
       setMsg("сохранено — действует сразу, без рестарта");
       router.refresh();
     } catch (e: any) {
@@ -52,17 +58,36 @@ export default function AiForm({ initial }: { initial: any }) {
   return (
     <div className="space-y-4">
       <Card title="API-ключ">
-        <div className="text-sm text-zinc-300">
-          {key.configured ? (
-            <>
-              Задан через ENV: <span className="font-mono">{key.mask}</span>
-            </>
-          ) : (
-            <span className="text-red-400">не задан (AI_API_KEY в .env воркера)</span>
-          )}
+        <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+          <label className="text-xs text-zinc-400">
+            Новый API key
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                if (e.target.value) setClearKey(false);
+              }}
+              placeholder={key.configured ? `Сейчас: ${key.mask} · оставь пустым, чтобы не менять` : "Вставь API key"}
+              className={`mt-1 w-full ${INPUT}`}
+              autoComplete="off"
+            />
+          </label>
+          <label className="flex items-center gap-2 pb-2 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              checked={clearKey}
+              onChange={(e) => {
+                setClearKey(e.target.checked);
+                if (e.target.checked) setApiKey("");
+              }}
+            />
+            удалить сохранённый ключ
+          </label>
         </div>
-        <p className="mt-1 text-xs text-zinc-500">
-          Ключ намеренно не редактируется и не возвращается через панель — меняется только в ENV воркера.
+        <p className="mt-2 text-xs text-zinc-500">
+          Ключ хранится в защищённом файле volume на сервере, не в PostgreSQL и не возвращается браузеру.
+          {key.configured ? <> Текущий: <span className="font-mono text-zinc-300">{key.mask}</span>.</> : " Сейчас ключ не задан."}
         </p>
       </Card>
 
