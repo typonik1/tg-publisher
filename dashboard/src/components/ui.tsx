@@ -34,7 +34,7 @@ export function Badge({ v, children }: { v: string; children?: ReactNode }) {
 
 export function Card({ title, right, children }: { title?: string; right?: ReactNode; children: ReactNode }) {
   return (
-    <section className="rounded-lg border border-zinc-800 bg-[#10131a] p-4">
+    <section className="rounded-2xl border border-white/[0.07] bg-[#10141d]/90 p-5 shadow-[0_18px_60px_rgba(0,0,0,.18)] backdrop-blur">
       {(title || right) && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           {title && <h2 className="text-sm font-semibold text-zinc-300">{title}</h2>}
@@ -48,7 +48,7 @@ export function Card({ title, right, children }: { title?: string; right?: React
 
 export function Stat({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-[#10131a] p-3">
+    <div className="rounded-2xl border border-white/[0.07] bg-[#10141d]/90 p-4 shadow-[0_14px_40px_rgba(0,0,0,.14)]">
       <div className="text-xs text-zinc-500">{label}</div>
       <div className="mt-1 break-words text-lg font-semibold text-zinc-100">{value}</div>
       {hint && <div className="mt-0.5 text-xs text-zinc-500">{hint}</div>}
@@ -87,4 +87,4 @@ export function Td({ children, className }: { children: ReactNode; className?: s
 }
 
 export const INPUT =
-  "rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-sky-700";
+  "rounded-xl border border-white/10 bg-[#0b0f16] px-3 py-2.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-violet-500/60 focus:ring-2 focus:ring-violet-500/10";
