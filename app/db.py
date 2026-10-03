@@ -74,6 +74,7 @@ ALTER TABLE posts ADD COLUMN IF NOT EXISTS forwards INT NOT NULL DEFAULT 0;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS replies INT NOT NULL DEFAULT 0;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION;
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'unknown';
 CREATE INDEX IF NOT EXISTS posts_scheduled_idx ON posts (scheduled_at) WHERE scheduled_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS posts_status_idx ON posts (status, next_attempt_at);
 
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS own_posts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+ALTER TABLE own_posts ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'unknown';
 
 -- постоянные действия панели (исполняются воркером, не HTTP-запросом)
 CREATE TABLE IF NOT EXISTS dashboard_actions (
@@ -137,6 +139,9 @@ def build_posts_where(f: dict) -> tuple[str, list]:
     if f.get("kind"):
         conds.append("p.kind = %s")
         args.append(f["kind"])
+    if f.get("media_type"):
+        conds.append("p.media_type = %s")
+        args.append(f["media_type"])
     if f.get("ai_status"):
         conds.append("p.ai_status = %s")
         args.append(f["ai_status"])
@@ -283,15 +288,16 @@ class DB:
         ai = AI_UNCHECKED if ai_enabled else AI_NOT_NEEDED
         await self._q("""
             INSERT INTO posts(source_id, group_key, source_msg_ids, source_date, text, ai_status, status,
-                              views, reactions, forwards, replies)
-            VALUES (%s,%s,%s,%s,%s,%s,'candidate',%s,%s,%s,%s)
+                              views, reactions, forwards, replies, media_type)
+            VALUES (%s,%s,%s,%s,%s,%s,'candidate',%s,%s,%s,%s,%s)
             ON CONFLICT (source_id, group_key) DO UPDATE SET
               source_msg_ids = (SELECT array_agg(DISTINCT x ORDER BY x)
                                 FROM unnest(posts.source_msg_ids || EXCLUDED.source_msg_ids) x),
               text = CASE WHEN posts.text = '' THEN EXCLUDED.text ELSE posts.text END,
+              media_type = EXCLUDED.media_type,
               updated_at = now()
             WHERE posts.status = 'candidate'
-        """, (sid, key, ids, date, text, ai, stats["views"], stats["reactions"], stats["forwards"], stats["replies"]))
+        """, (sid, key, ids, date, text, ai, stats["views"], stats["reactions"], stats["forwards"], stats["replies"], stats.get('media_type', 'unknown')))
 
     async def backfill_candidates(self, sid, items: list[tuple], ai_enabled: bool) -> int:
         """Backfill конкретного источника: только новые candidate, курсор не трогаем, дубли исключены."""
@@ -300,10 +306,10 @@ class DB:
         for key, ids, date, text, st in items:
             rows = await self._q("""
                 INSERT INTO posts(source_id, group_key, source_msg_ids, source_date, text, ai_status, status,
-                                  views, reactions, forwards, replies)
-                VALUES (%s,%s,%s,%s,%s,%s,'candidate',%s,%s,%s,%s)
+                                  views, reactions, forwards, replies, media_type)
+                VALUES (%s,%s,%s,%s,%s,%s,'candidate',%s,%s,%s,%s,%s)
                 ON CONFLICT (source_id, group_key) DO NOTHING RETURNING id""",
-                (sid, key, ids, date, text, ai, st["views"], st["reactions"], st["forwards"], st["replies"]))
+                (sid, key, ids, date, text, ai, st["views"], st["reactions"], st["forwards"], st["replies"], st.get('media_type', 'unknown')))
             n += len(rows)
         return n
 
@@ -314,8 +320,14 @@ class DB:
               AND p.source_date >= now() - make_interval(hours => %s)""", (max_age_h,))
 
     async def set_stats(self, pid, st: dict):
-        await self._q("UPDATE posts SET views=%s, reactions=%s, forwards=%s, replies=%s, updated_at=now() WHERE id=%s",
-                      (st["views"], st["reactions"], st["forwards"], st["replies"], pid))
+        await self._q("UPDATE posts SET views=%s, reactions=%s, forwards=%s, replies=%s, media_type=%s, updated_at=now() WHERE id=%s",
+                      (st["views"], st["reactions"], st["forwards"], st["replies"], st.get('media_type', 'unknown'), pid))
+
+    async def unclassified_posts(self):
+        return await self._q("SELECT p.id, p.source_msg_ids, s.ref FROM posts p JOIN automation_sources s ON s.id=p.source_id WHERE p.media_type='unknown' ORDER BY p.id DESC LIMIT 100")
+
+    async def set_media_type(self, pid, media):
+        await self._q('UPDATE posts SET media_type=%s WHERE id=%s', (media, pid))
 
     async def claim_best_candidate(self, min_age_min, max_age_h, baseline_days, min_score) -> Post | None:
         """Лучший кандидат относительно средних показателей СВОЕГО источника:
@@ -352,42 +364,44 @@ class DB:
         return Post(**r)
 
     # --- собственный канал ---
-    async def upsert_own(self, key, ids, date, text, reactions, views, forwards):
-        await self._q("""INSERT INTO own_posts(group_key, msg_ids, post_date, text, reactions, views, forwards)
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
+    async def upsert_own(self, key, ids, date, text, reactions, views, forwards, media_type='unknown'):
+        await self._q("""INSERT INTO own_posts(group_key, msg_ids, post_date, text, reactions, views, forwards, media_type)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
             ON CONFLICT (group_key) DO UPDATE SET msg_ids=EXCLUDED.msg_ids, text=EXCLUDED.text,
-              reactions=EXCLUDED.reactions, views=EXCLUDED.views, forwards=EXCLUDED.forwards, updated_at=now()""",
-            (key, ids, date, text, reactions, views, forwards))
+              reactions=EXCLUDED.reactions, views=EXCLUDED.views, forwards=EXCLUDED.forwards, media_type=EXCLUDED.media_type, updated_at=now()""",
+            (key, ids, date, text, reactions, views, forwards, media_type))
 
     async def claim_best_own(self, own_sid, min_age_days, cooldown_days) -> Post | None:
         """Самый залайканный старый пост своего канала, который сам не является репостом
         и не репостился в течение cooldown."""
         rows = await self._q("""
             WITH best AS (
-              SELECT o.group_key, o.msg_ids, o.post_date, o.text, o.reactions FROM own_posts o
+              SELECT o.group_key, o.msg_ids, o.post_date, o.text, o.reactions, o.media_type FROM own_posts o
               WHERE o.post_date <= now() - make_interval(days => %s)
                 AND (o.last_reposted_at IS NULL OR o.last_reposted_at <= now() - make_interval(days => %s))
                 AND NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.dest_msg_ids && o.msg_ids)
                 AND NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.source_msg_ids = o.msg_ids
-                                AND r.status IN ('processing','pending','ambiguous'))
+                                AND r.status IN ('candidate','processing','pending','ambiguous'))
               ORDER BY o.reactions DESC, o.forwards DESC LIMIT 1
               FOR UPDATE SKIP LOCKED
             ), mark AS (
               UPDATE own_posts o SET last_reposted_at=now() FROM best WHERE o.group_key=best.group_key
             )
             INSERT INTO posts(source_id, kind, group_key, source_msg_ids, source_date, text, status,
-                              ai_status, attempts, claimed_at, reactions)
+                              ai_status, attempts, claimed_at, reactions, media_type)
             SELECT %s, 'repost', 'r' || best.group_key || ':' || extract(epoch FROM now())::bigint,
-                   best.msg_ids, best.post_date, best.text, 'processing', 'not_needed', 1, now(), best.reactions
+                   best.msg_ids, best.post_date, best.text, 'processing', 'not_needed', 1, now(), best.reactions, best.media_type
             FROM best RETURNING id""", (min_age_days, cooldown_days, own_sid))
         if not rows:
             return None
         return await self._load(rows[0]["id"])
 
-    async def own_page(self, order: str = "reactions", limit: int = 50, offset: int = 0) -> tuple[list, int]:
+    async def own_page(self, order: str = "reactions", limit: int = 50, offset: int = 0, media_type='') -> tuple[list, int]:
         ob = "reactions DESC, forwards DESC" if order == "reactions" else "post_date DESC"
-        total = (await self._q("SELECT count(*) AS n FROM own_posts"))[0]["n"]
-        rows = await self._q(f"SELECT * FROM own_posts ORDER BY {ob} LIMIT %s OFFSET %s", (limit, offset))
+        where = ' WHERE media_type=%s' if media_type else ''
+        args = (media_type,) if media_type else ()
+        total = (await self._q('SELECT count(*) AS n FROM own_posts' + where, args))[0]["n"]
+        rows = await self._q(f"SELECT * FROM own_posts{where} ORDER BY {ob} LIMIT %s OFFSET %s", (*args, limit, offset))
         return rows, total
 
     async def get_own(self, group_key: str):
@@ -406,13 +420,14 @@ class DB:
         не создаём пост, если этот контент уже ушёл в канал или уже в очереди на отправку."""
         rows = await self._q("""
             INSERT INTO posts(source_id, kind, group_key, source_msg_ids, source_date, text, status,
-                              ai_status, attempts, reactions, scheduled_at)
-            SELECT %s,'repost',%s,%s,%s,%s,'candidate','not_needed',1,%s,%s
+                              ai_status, attempts, reactions, scheduled_at, media_type)
+            SELECT %s,'repost',%s,%s,%s,%s,'candidate','not_needed',1,%s,%s,
+                   COALESCE((SELECT media_type FROM own_posts WHERE group_key=%s), 'unknown')
             WHERE NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.dest_msg_ids && %s::bigint[])
               AND NOT EXISTS (SELECT 1 FROM posts r WHERE r.kind='repost' AND r.source_msg_ids = %s::bigint[]
                               AND r.status IN ('candidate','processing','pending','ambiguous'))
             RETURNING id""",
-            (own_sid, f"r{group_key}:{uuid.uuid4().hex[:8]}", ids, date, text, reactions, scheduled_at, ids, ids))
+            (own_sid, f"r{group_key}:{uuid.uuid4().hex[:8]}", ids, date, text, reactions, scheduled_at, group_key, ids, ids))
         return rows[0]["id"] if rows else None
 
     # --- очередь: списки для панели ---

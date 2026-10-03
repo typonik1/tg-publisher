@@ -1,17 +1,18 @@
 import { pubFetch } from "@/lib/api";
 import ActionButton from "@/components/ActionButton";
-import { Empty, ErrorBox, PageHeader, Td, Th } from "@/components/ui";
+import { Badge, INPUT, Empty, ErrorBox, PageHeader, Td, Th, humanLabel } from "@/components/ui";
 import RepostButton from "@/components/RepostButton";
 import MediaPreview from "@/components/MediaPreview";
 import { excerpt, fmtDate } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-export default async function OwnPostsPage() {
+export default async function OwnPostsPage({searchParams}: {searchParams: Record<string,string|undefined>}) {
+  const media=searchParams.media_type || "";
   let data: any = { items: [], total: 0 };
   let error = "";
   try {
-    data = await pubFetch("/api/own?limit=50");
+    data = await pubFetch(`/api/own?limit=50${media?`&media_type=${encodeURIComponent(media)}`:""}`);
   } catch (e: any) {
     error = e?.message ?? "нет связи с Control API";
   }
@@ -21,6 +22,11 @@ export default async function OwnPostsPage() {
     <div className="space-y-5">
       <PageHeader eyebrow="Контент" title={`Архив канала · ${data?.total ?? 0}`} description="Опубликованные ранее материалы. Лучшие из них можно безопасно отправить повторно." action={<ActionButton path="own/scan" label="Обновить архив" variant="primary" doneLabel="архив обновлён" />} />
       {error && <ErrorBox message={error} />}
+      <form method="get" action="/own-posts" className="filter-panel">
+        <label className="field-label">Формат материала<select name="media_type" defaultValue={media} className={INPUT}>
+          <option value="">Все форматы</option>{["photo","video","mixed","text","document","unknown"].map(k=><option key={k} value={k}>{humanLabel(k)}</option>)}
+        </select></label><button className="button-primary">Показать</button>
+      </form>
 
       {items.length === 0 && !error ? (
         <Empty>
@@ -44,7 +50,7 @@ export default async function OwnPostsPage() {
             <tbody>
               {items.map((o) => (
                 <tr key={o.group_key}>
-                  <Td><MediaPreview postId={o.group_key} thumbnail src={`/api/dash/own/preview?group_key=${encodeURIComponent(o.group_key)}`} /></Td>
+                  <Td><div className="space-y-2"><MediaPreview postId={o.group_key} thumbnail src={`/api/dash/own/preview?group_key=${encodeURIComponent(o.group_key)}`} /><Badge v={o.media_type || "unknown"}/></div></Td>
                   <Td className="whitespace-nowrap text-xs text-zinc-500">{fmtDate(o.post_date)}</Td>
                   <Td>{o.reactions ?? 0}</Td>
                   <Td>{o.views ?? 0}</Td>

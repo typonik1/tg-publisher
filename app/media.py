@@ -2,6 +2,28 @@
 from telethon.tl import types as t
 
 
+def media_type(msgs):
+    """Classify actual Telegram media, not filenames or thumbnail presence."""
+    kinds = set()
+    for msg in msgs:
+        media = getattr(msg, 'media', None)
+        if isinstance(media, t.MessageMediaPhoto):
+            kinds.add('photo')
+        elif isinstance(media, t.MessageMediaDocument):
+            doc = getattr(media, 'document', None)
+            attrs = getattr(doc, 'attributes', [])
+            mime = getattr(doc, 'mime_type', '') or ''
+            if mime.startswith('video/') or any(isinstance(a, (t.DocumentAttributeVideo, t.DocumentAttributeAnimated)) for a in attrs):
+                kinds.add('video')
+            elif mime.startswith('image/') and not any(isinstance(a, t.DocumentAttributeSticker) for a in attrs):
+                kinds.add('photo')
+            else:
+                kinds.add('document')
+    if not kinds:
+        return 'text'
+    return next(iter(kinds)) if len(kinds) == 1 else 'mixed'
+
+
 def album_kind(msg):
     if isinstance(msg.media, t.MessageMediaPhoto):
         return "visual"

@@ -79,6 +79,7 @@ def parse_posts_filters(qs) -> dict:
     f: dict = {}
     _one_of(qs, "status", POST_STATUSES, f)
     _one_of(qs, "kind", KINDS, f)
+    _one_of(qs, "media_type", {"photo", "video", "mixed", "text", "document", "unknown"}, f)
     _one_of(qs, "ai_status", AI_STATUSES, f)
     if qs.get("source_id"):
         try:
@@ -552,7 +553,10 @@ async def h_own(request: web.Request) -> web.Response:
     order = request.query.get("order", "reactions")
     if order not in ("reactions", "date"):
         raise ValueError("order: reactions | date")
-    items, total = await ctx.db.own_page(order, limit, offset)
+    media = request.query.get('media_type', '')
+    if media and media not in {"photo", "video", "mixed", "text", "document", "unknown"}:
+        raise ValueError('Неверный формат материала')
+    items, total = await ctx.db.own_page(order, limit, offset, media_type=media) if media else await ctx.db.own_page(order, limit, offset)
     for it in items:
         it["text"] = (it.get("text") or "")[:200]
     return jr({"items": items, "total": total, "limit": limit, "offset": offset})

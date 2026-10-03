@@ -9,6 +9,7 @@ export const STATUS_LABELS: Record<string, string> = {
 };
 
 Object.assign(STATUS_LABELS, {
+  photo: "Фото", video: "Видео", mixed: "Фото и видео / смешанный альбом", text: "Только текст", document: "Другой файл", unknown: "Формат уточняется",
   settings_updated: "Настройки сохранены", worker_started: "Бот запущен",
   source_collected: "Новые посты найдены", source_error: "Ошибка источника",
   source_added: "Источник добавлен", source_verified: "Источник проверен",

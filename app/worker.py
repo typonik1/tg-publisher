@@ -26,7 +26,7 @@ from .logic import (AI_FAILED, AI_GENERATED, AI_NO_PREVIEW, AI_PROCESSING, AI_UN
                     OLD, PARSED, SKIPPED, backoff_seconds, build_caption, due_slot, group_messages, in_window)
 from .logic import parse_ref
 from .settings import RuntimeSettings
-from .media import album_kind, media_batches, prepare_media
+from .media import album_kind, media_batches, prepare_media, media_type
 from .preview import PreviewCache
 from .tg import ensure_connected, resolve
 
@@ -39,7 +39,7 @@ LINK_ALLOWED_CHANNEL_ID = 1140244688
 
 def msg_stats(msgs) -> dict:
     """Метрики поста (альбом = сумма реакций, максимум просмотров)."""
-    st = {"views": 0, "reactions": 0, "forwards": 0, "replies": 0}
+    st = {"views": 0, "reactions": 0, "forwards": 0, "replies": 0, "media_type": media_type(msgs)}
     for m in msgs:
         st["views"] = max(st["views"], m.views or 0)
         st["forwards"] = max(st["forwards"], m.forwards or 0)
@@ -99,6 +99,10 @@ class Worker:
                 await events.log_event(self.db, events.SOURCE_ERROR, level="warning", source_id=src["id"],
                                        message=f"{src['ref']}: {type(e).__name__}: {e}")
         await self.refresh_stats(rt.max_post_age_hours)
+        await self.refresh_media_types()
+        if await self.db.kv_get('media_index_version') != '1':
+            await self.scan_own(force=True, rt=rt)
+            await self.db.kv_set('media_index_version', '1')
         await self.db.kv_set("last_collect_at", time.time())
 
     async def _collect_source(self, src, settle, rt):
@@ -159,6 +163,29 @@ class Worker:
         if rows:
             log.info("stats refreshed for %d candidates", len(rows))
 
+    async def refresh_media_types(self):
+        rows = await self.db.unclassified_posts()
+        by_src = defaultdict(list)
+        for row in rows:
+            by_src[row['ref']].append(row)
+        for ref, posts in by_src.items():
+            try:
+                entity = await resolve(self.client, ref)
+                ids = list(dict.fromkeys(mid for p in posts for mid in p['source_msg_ids']))
+                got = {}
+                for i in range(0, len(ids), 100):
+                    for msg in await self.client.get_messages(entity, ids=ids[i:i+100]):
+                        if msg:
+                            got[msg.id] = msg
+                for post in posts:
+                    msgs = [got[mid] for mid in post['source_msg_ids'] if mid in got]
+                    if msgs:
+                        await self.db.set_media_type(post['id'], media_type(msgs))
+            except UNCERTAIN:
+                raise
+            except Exception as exc:
+                log.warning('media classification source=%s failed: %s', ref, exc)
+
     # ================= снимок своего канала =================
     async def scan_own(self, force=False, rt=None):
         rt = rt or await self.rt.view()
@@ -176,7 +203,7 @@ class Worker:
                 continue
             st = msg_stats(group)
             text = next((m.message for m in group if m.message), "")
-            await self.db.upsert_own(key, ids, group[0].date, text, st["reactions"], st["views"], st["forwards"])
+            await self.db.upsert_own(key, ids, group[0].date, text, st["reactions"], st["views"], st["forwards"], st['media_type'])
             n += 1
         await self.db.kv_set("own_scan_at", time.time())
         log.info("own channel scan done: %d posts", n)

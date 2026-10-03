@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 const STATUSES = ["candidate", "pending", "processing", "published", "failed", "ambiguous", "skipped", "expired"];
 const KINDS = ["parsed", "repost"];
 const AI_STATUSES = ["unchecked", "processing", "generated", "not_needed", "no_preview", "failed", "manual"];
-const FILTER_KEYS = ["status", "kind", "ai_status", "source_id", "date", "q"];
+const FILTER_KEYS = ["status", "kind", "media_type", "ai_status", "source_id", "date", "q"];
 const LIMIT = 25;
 
 type SP = Record<string, string | string[] | undefined>;
@@ -63,13 +63,17 @@ export default async function QueuePage({ searchParams }: { searchParams: SP }) 
             </option>
           ))}
         </select></label>
-        <label className="field-label">Тип материала<select name="kind" defaultValue={sp("kind")} className={INPUT}>
+        <label className="field-label">Происхождение<select name="kind" defaultValue={sp("kind")} className={INPUT}>
           <option value="">Все типы</option>
           {KINDS.map((k) => (
             <option key={k} value={k}>
               {humanLabel(k)}
             </option>
           ))}
+        </select></label>
+        <label className="field-label">Формат материала<select name="media_type" defaultValue={sp("media_type")} className={INPUT}>
+          <option value="">Фото и видео — все форматы</option>
+          {["photo", "video", "mixed", "text", "document", "unknown"].map(k=><option key={k} value={k}>{humanLabel(k)}</option>)}
         </select></label>
         <label className="field-label">Текст AI<select name="ai_status" defaultValue={sp("ai_status")} className={INPUT}>
           <option value="">Любое состояние</option>
@@ -109,7 +113,7 @@ export default async function QueuePage({ searchParams }: { searchParams: SP }) 
           {items.map((p) => <article key={p.id} className="surface overflow-hidden">
             <MediaPreview postId={p.id} compact />
             <div className="space-y-4 p-5">
-              <div className="flex flex-wrap items-center gap-2"><Link href={`/queue/${p.id}`} className="font-semibold text-sky-300">Пост №{p.id}</Link><Badge v={p.status}/><Badge v={p.kind}/></div>
+              <div className="flex flex-wrap items-center gap-2"><Link href={`/queue/${p.id}`} className="font-semibold text-sky-300">Пост №{p.id}</Link><Badge v={p.status}/><Badge v={p.kind}/><Badge v={p.media_type || "unknown"}/></div>
               <div className="flex flex-wrap justify-between gap-2 text-xs text-slate-400"><span>{p.source_ref}</span><span>{fmtDate(p.source_date)}</span></div>
               <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-200">{excerpt(p.text,280) || "Публикация без текста"}</p>
               <div className="flex flex-wrap gap-4 text-xs text-slate-400"><span>👁 {p.views ?? 0}</span><span>❤ {p.reactions ?? 0}</span><span>↗ {p.forwards ?? 0}</span><span>💬 {p.replies ?? 0}</span></div>
