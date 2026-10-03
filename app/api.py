@@ -385,8 +385,8 @@ async def h_ai_get(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     v = await ctx.settings.api_view()
     data = {k: v[k] for k in ("ai_enabled", "ai_required", "ai_base_url", "ai_model", "ai_prompt", "ai_timeout")}
-    data["api_key"] = mask_key(ctx.cfg.ai_api_key)
-    data["api_key_env_only"] = True
+    data["api_key"] = mask_key(ctx.settings.effective_ai_key())
+    data["api_key_env_only"] = False
     return jr(data)
 
 
@@ -394,10 +394,22 @@ async def h_ai_get(request: web.Request) -> web.Response:
 async def h_ai_put(request: web.Request) -> web.Response:
     ctx: ApiContext = request.app["ctx"]
     body = await body_json(request)
+    changed = []
     if "api_key" in body:
-        raise ValueError("API key задаётся только через ENV (AI_API_KEY) и не меняется через панель")
-    cleaned = await ctx.settings.update("ai", body)
-    await events.log_event(ctx.db, events.SETTINGS_UPDATED, message="ai", metadata={"keys": sorted(cleaned)})
+        key = str(body.pop("api_key") or "").strip()
+        if key:
+            ctx.settings.set_ai_api_key(key)
+            changed.append("api_key")
+    if body.pop("clear_api_key", False):
+        ctx.settings.set_ai_api_key("")
+        changed.append("api_key_cleared")
+    cleaned = {}
+    if body:
+        cleaned = await ctx.settings.update("ai", body)
+        changed.extend(sorted(cleaned))
+    if not changed:
+        raise ValueError("нет изменений")
+    await events.log_event(ctx.db, events.SETTINGS_UPDATED, message="ai", metadata={"keys": changed})
     return await h_ai_get(request)
 
 
