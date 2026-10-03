@@ -95,6 +95,7 @@ class Config:
     ai_required: bool = False
     ai_base_url: str = ""
     ai_api_key: str = field(default="", repr=False)
+    ai_api_key_file: str = "/home/app/.data/ai_api_key"
     ai_model: str = ""
     ai_timeout: int = 40
     ai_prompt: str = ""
@@ -145,6 +146,7 @@ class Config:
             ai_required=_bool("AI_REQUIRED"),
             ai_base_url=_env("AI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
             ai_api_key=_env("AI_API_KEY"),
+            ai_api_key_file=_env("AI_API_KEY_FILE", "/home/app/.data/ai_api_key"),
             ai_model=_env("AI_MODEL", "gpt-4o-mini"),
             ai_timeout=_int("AI_TIMEOUT_SEC", 40),
             ai_prompt=_env("AI_PROMPT", "Перепиши подпись к посту для Telegram-канала: коротко и живо. "
