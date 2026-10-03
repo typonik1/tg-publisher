@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from pathlib import Path
 import time as _time
 from datetime import time as dtime
 from types import SimpleNamespace
@@ -188,8 +190,43 @@ class RuntimeSettings:
         """Синхронный снимок для воркера: все runtime-ключи + ai_api_key (только ENV)."""
         ov = await self._overrides()
         d = {k: self._resolved(k, ov) for k in VALIDATORS}
-        d["ai_api_key"] = self.cfg.ai_api_key
+        d["ai_api_key"] = self.effective_ai_key()
         return SimpleNamespace(**d)
+
+
+    def effective_ai_key(self) -> str:
+        """Runtime AI key: persistent secret file wins, ENV is fallback."""
+        path = Path(self.cfg.ai_api_key_file)
+        try:
+            if path.exists():
+                value = path.read_text(encoding="utf-8").strip()
+                if value:
+                    return value
+        except OSError as e:
+            log.warning("cannot read AI key file: %s", e)
+        return self.cfg.ai_api_key
+
+    def set_ai_api_key(self, value: str) -> None:
+        """Persist secret outside DB. Never log or return the value."""
+        value = str(value or "").strip()
+        if len(value) > 4096:
+            raise SettingsError("api_key слишком длинный")
+        path = Path(self.cfg.ai_api_key_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not value:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as e:
+                raise SettingsError(f"не удалось удалить сохранённый API key: {e}") from e
+            return
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            tmp.write_text(value, encoding="utf-8")
+            os.chmod(tmp, 0o600)
+            tmp.replace(path)
+            os.chmod(path, 0o600)
+        except OSError as e:
+            raise SettingsError(f"не удалось сохранить API key: {e}") from e
 
     async def get(self, key: str):
         ov = await self._overrides()
