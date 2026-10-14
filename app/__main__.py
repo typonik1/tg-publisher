@@ -7,13 +7,14 @@ import sys
 import tempfile
 
 from .config import Config, ConfigError
+from .tg import resolve
 
 
 async def main(argv):
     cmd = argv[0] if argv else "run"
     cfg = Config.from_env()
     from .db import DB
-    from .tg import build_client, ensure_connected, resolve
+    from .tg import build_client, ensure_connected
     client = build_client(cfg)
     if cmd == "login":
         # единственный интерактивный шаг: номер, код, 2FA. Сессия ложится в volume.
