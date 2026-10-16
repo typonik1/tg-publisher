@@ -26,6 +26,31 @@ class FilterSourceContentTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(is_advertisement(text))
 
+    def test_detects_native_telegram_ad_cta_patterns(self):
+        for text in (
+            "🔞 @masha16 отправила видео",
+            "@masha16 скинула новое видео",
+            "18+ @masha16",
+            "@masha16 ждёт тебя",
+            "смотри у @masha16",
+            "забирай у @masha16",
+            "приват у @masha16",
+            "переходи @masha16",
+            "подпишись на @masha16",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(is_advertisement(text))
+
+        for text in (
+            "Автор: @masha16",
+            "Спасибо @masha16",
+            "Новости от @masha16",
+            "Арт от @masha16",
+            "Обычный пост без рекламы",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(is_advertisement(text))
+
     def test_removes_visible_links_mentions_and_email_without_touching_decimal_numbers(self):
         text = (
             "Цена 12.50 — реклама https://spam.example/x, www.ads.ru/a; "
