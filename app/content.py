@@ -38,14 +38,39 @@ _EXPLICIT_ADVERTISEMENT = re.compile(
     r"|\b(?:рекламный пост|рекламная интеграция|на правах рекламы)\b"
 )
 
+# Нативные рекламные/переливные подписи часто не содержат #реклама. Не считаем
+# любой @mention рекламой: нужен либо adult-marker, либо характерный CTA-шаблон.
+_MENTION = re.compile(r"(?iu)(?<![\w@])@[a-z0-9_]{4,}(?!\w)")
+_ADULT_MARKER = re.compile(r"(?iu)(?:🔞|(?<!\w)18\s*\+(?!\w))")
+_MENTION_AD_CTA = re.compile(
+    r"(?iu)"
+    r"(?:"
+    r"@[a-z0-9_]{4,}.{0,48}\b(?:отправил[аи]?|скинул[аи]?|прислал[аи]?)\b.{0,24}\b(?:видео|видос|фото)\b"
+    r"|(?:смотри|смотреть|забирай|переходи|подпишись|подписывайся|заходи)\b.{0,48}@[a-z0-9_]{4,}"
+    r"|@[a-z0-9_]{4,}.{0,48}\b(?:жд[её]т\s+тебя|приват|личк[ае])\b"
+    r"|\b(?:приват|личк[ае])\b.{0,48}@[a-z0-9_]{4,}"
+    r")"
+)
+
 
 def _u16(value: str) -> int:
     return len(value.encode("utf-16-le")) // 2
 
 
 def is_advertisement(text: str | None) -> bool:
-    """Распознаёт только явную маркировку рекламы, без догадок по содержанию."""
-    return bool(_EXPLICIT_ADVERTISEMENT.search(text or ""))
+    """Распознаёт явную рекламу и типичные Telegram CTA-переливы.
+
+    Обычный @mention сам по себе не считается рекламой: нужен adult-marker
+    или характерная связка mention + призыв/«отправила видео».
+    """
+    source = re.sub(r"\s+", " ", text or "").strip()
+    if not source:
+        return False
+    if _EXPLICIT_ADVERTISEMENT.search(source):
+        return True
+    if _MENTION.search(source) and _ADULT_MARKER.search(source):
+        return True
+    return bool(_MENTION_AD_CTA.search(source))
 
 
 def filter_source_content(text: str | None, entities: list | None = None) -> tuple[str, list]:
