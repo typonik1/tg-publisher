@@ -8,6 +8,7 @@ import time
 
 from . import events
 from .ai import generate_caption
+from .content import is_advertisement
 from .logic import AI_UNCHECKED, PARSED, canonical_ref, group_messages
 from .tg import resolve
 
@@ -82,6 +83,9 @@ async def h_backfill_source(w, payload):
         if not any(usable(m) for m in group):
             continue
         text = next((m.message for m in group if m.message), "")
+        if getattr(ent, "id", None) != 1140244688 and is_advertisement(text):
+            log.info("source=%s group=%s: advertisement excluded from backfill", src["ref"], key)
+            continue
         items.append((key, ids, group[0].date, text, msg_stats(group)))
     added = await w.db.backfill_candidates(sid, items, rt.ai_enabled)
     await w.db.set_source_title(sid, getattr(ent, "title", None))
