@@ -129,6 +129,11 @@ class Worker:
             if not any(usable(m) for m in msgs):
                 continue
             text = next((m.message for m in msgs if m.message), "")
+            # Рекламу чужих источников отсекаем до очереди. Для собственного
+            # разрешённого канала сохраняем промо/ссылки как и раньше.
+            if getattr(entity, "id", None) != LINK_ALLOWED_CHANNEL_ID and is_advertisement(text):
+                log.info("source=%s group=%s: advertisement excluded", src["ref"], key)
+                continue
             await self.db.upsert_candidate(src["id"], key, ids, msgs[0].date, text, msg_stats(msgs),
                                            rt.ai_enabled)
             added += 1
